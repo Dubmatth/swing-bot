@@ -1,11 +1,12 @@
 /**
  * Runner event-driven du backtest.
  *
- * Rejoue une BarSeries barre par barre à travers une file d'événements
- * typés (bar-closed → order-requested → order-filled/order-rejected). Le
- * futur live-runner alimentera la même file depuis un flux temps réel — la
- * logique d'exécution et de portefeuille est déjà écrite pour être
- * réutilisée telle quelle.
+ * Rejoue plusieurs BarSeries alignées sur la même grille temporelle, barre
+ * par barre, à travers une file d'événements typés (bar-closed →
+ * order-requested → order-filled/order-rejected). Le futur live-runner
+ * alimentera la même file depuis un flux temps réel — la logique
+ * d'exécution et de portefeuille est déjà écrite pour être réutilisée
+ * telle quelle.
  */
 
 import type { BarSeries } from '../data/series.ts';
@@ -14,13 +15,14 @@ import { BarView } from '../strategy/types.ts';
 import type { FeeSchedule } from './execution.ts';
 import { simulateBuy, simulateSell } from './execution.ts';
 import type { Portfolio } from './portfolio.ts';
-import { applyBuyFill, applySellFill, createPortfolio } from './portfolio.ts';
+import { applyBuyFill, applySellFill, createPortfolio, portfolioEquity } from './portfolio.ts';
 import type { BacktestEvent } from './events.ts';
 
 export interface BacktestOptions {
   readonly initialCash: number;
   readonly fees: FeeSchedule;
   readonly slippageBps: number;
+  readonly maxConcurrentPositions: number;
 }
 
 export interface EquityPoint {
@@ -32,75 +34,139 @@ export interface BacktestResult {
   readonly portfolio: Portfolio;
   readonly equityCurve: readonly EquityPoint[];
   readonly rejectedOrders: number;
+  readonly rejectionReasons: readonly string[];
+}
+
+function marksAt(series: ReadonlyMap<string, BarSeries>, t: number): Map<string, number> {
+  const marks = new Map<string, number>();
+  for (const [symbol, s] of series) {
+    marks.set(symbol, s.close[t]!);
+  }
+  return marks;
 }
 
 export function runBacktest(
-  series: BarSeries,
+  series: ReadonlyMap<string, BarSeries>,
   strategy: Strategy,
   opts: BacktestOptions,
 ): BacktestResult {
-  if (series.length < strategy.warmup + 2) {
+  if (series.size === 0) {
+    throw new Error('runBacktest : au moins une série requise');
+  }
+  if (!(opts.maxConcurrentPositions >= 1)) {
+    throw new RangeError(`maxConcurrentPositions invalide : ${opts.maxConcurrentPositions}`);
+  }
+
+  const entries = [...series];
+  const [firstSymbol, firstSeries] = entries[0]!;
+  const length = firstSeries.length;
+  for (const [symbol, s] of entries) {
+    if (s.length !== length) {
+      throw new Error(
+        `Grille temporelle incohérente : ${symbol} a ${s.length} barre(s), ${firstSymbol} en a ${length}`,
+      );
+    }
+    if (s.time[0] !== firstSeries.time[0] || s.time[length - 1] !== firstSeries.time[length - 1]) {
+      throw new Error(
+        `Grille temporelle incohérente entre ${symbol} et ${firstSymbol} : bornes temporelles différentes`,
+      );
+    }
+  }
+
+  if (length < strategy.warmup + 2) {
     throw new Error(
-      `${series.symbol} : ${series.length} barre(s), insuffisant pour un warmup de ` +
-        `${strategy.warmup} barre(s) avec exécution sur la barre suivante`,
+      `${length} barre(s), insuffisant pour un warmup de ${strategy.warmup} barre(s) ` +
+        `avec exécution sur la barre suivante`,
     );
   }
 
-  const symbol = series.symbol;
   const portfolio = createPortfolio(opts.initialCash);
   const equityCurve: EquityPoint[] = [];
   let rejectedOrders = 0;
+  const rejectionReasons: string[] = [];
   const execOpts = { fees: opts.fees, slippageBps: opts.slippageBps };
+  const time = firstSeries.time;
 
-  for (let t = strategy.warmup; t <= series.length - 2; t++) {
-    const queue: BacktestEvent[] = [{ kind: 'bar-closed', symbol, t }];
+  for (let t = strategy.warmup; t <= length - 2; t++) {
+    const equitySnapshot = portfolioEquity(portfolio, marksAt(series, t));
+    const queue: BacktestEvent[] = [{ kind: 'bar-closed', t }];
 
     while (queue.length > 0) {
       const event = queue.shift()!;
 
       switch (event.kind) {
         case 'bar-closed': {
-          const view = new BarView(series, event.t);
+          const views = new Map<string, BarView>();
+          for (const [symbol, s] of series) {
+            views.set(symbol, new BarView(s, event.t));
+          }
           const ctx: StrategyContext = {
-            views: new Map([[symbol, view]]),
+            views,
             positions: portfolio.positions,
-            now: series.time[event.t]!,
+            now: time[event.t]!,
           };
           for (const intent of strategy.decide(ctx)) {
             if (intent.kind === 'enter') {
-              if (intent.symbol !== symbol) {
-                queue.push({
-                  kind: 'order-rejected',
-                  symbol: intent.symbol,
-                  side: 'buy',
-                  reason: 'symbole hors univers du runner',
-                  time: series.time[event.t]!,
-                });
-              } else {
-                queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'buy', reason: intent.reason });
-              }
+              queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'buy', reason: intent.reason });
             } else if (intent.kind === 'exit') {
-              if (intent.symbol !== symbol) {
-                queue.push({
-                  kind: 'order-rejected',
-                  symbol: intent.symbol,
-                  side: 'sell',
-                  reason: 'symbole hors univers du runner',
-                  time: series.time[event.t]!,
-                });
-              } else {
-                queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'sell', reason: intent.reason });
-              }
+              queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'sell', reason: intent.reason });
             }
           }
           break;
         }
 
         case 'order-requested': {
-          const fillT = t + 1;
-          const fillTime = series.time[fillT]!;
+          const targetSeries = series.get(event.symbol);
+          if (!targetSeries) {
+            queue.push({
+              kind: 'order-rejected',
+              symbol: event.symbol,
+              side: event.side,
+              reason: 'symbole hors univers du runner',
+              time: time[t]!,
+            });
+            break;
+          }
 
-          if (series.synthetic[fillT] === 1) {
+          const fillT = t + 1;
+          const fillTime = targetSeries.time[fillT]!;
+          let budget = 0;
+
+          if (event.side === 'buy') {
+            if (portfolio.positions.size >= opts.maxConcurrentPositions) {
+              queue.push({
+                kind: 'order-rejected',
+                symbol: event.symbol,
+                side: 'buy',
+                reason: 'plafond de positions concurrentes atteint',
+                time: fillTime,
+              });
+              break;
+            }
+            if (portfolio.positions.has(event.symbol)) {
+              queue.push({
+                kind: 'order-rejected',
+                symbol: event.symbol,
+                side: 'buy',
+                reason: 'position déjà ouverte sur ce symbole',
+                time: fillTime,
+              });
+              break;
+            }
+            budget = Math.min(portfolio.cash, equitySnapshot / opts.maxConcurrentPositions);
+            if (!(budget > 0)) {
+              queue.push({
+                kind: 'order-rejected',
+                symbol: event.symbol,
+                side: 'buy',
+                reason: 'budget alloué insuffisant',
+                time: fillTime,
+              });
+              break;
+            }
+          }
+
+          if (targetSeries.synthetic[fillT] === 1) {
             queue.push({
               kind: 'order-rejected',
               symbol: event.symbol,
@@ -111,10 +177,14 @@ export function runBacktest(
             break;
           }
 
-          const referencePrice = series.open[fillT]!;
+          const referencePrice = targetSeries.open[fillT]!;
           if (event.side === 'buy') {
-            const fill = simulateBuy(portfolio.cash, referencePrice, execOpts);
-            queue.push({
+            const fill = simulateBuy(budget, referencePrice, execOpts);
+            // Traité immédiatement (unshift, pas push) : un fill doit affecter le
+            // portefeuille avant que le order-requested suivant de la même barre ne
+            // lise portfolio.positions/cash — sinon deux achats simultanés voient
+            // tous les deux le même plafond/cash non encore décrémenté.
+            queue.unshift({
               kind: 'order-filled',
               symbol: event.symbol,
               side: 'buy',
@@ -136,7 +206,9 @@ export function runBacktest(
               break;
             }
             const fill = simulateSell(position.quantity, referencePrice, execOpts);
-            queue.push({
+            // Voir commentaire sur la branche buy : unshift pour appliquer le fill
+            // avant le order-requested suivant de la même barre.
+            queue.unshift({
               kind: 'order-filled',
               symbol: event.symbol,
               side: 'sell',
@@ -161,16 +233,17 @@ export function runBacktest(
 
         case 'order-rejected': {
           rejectedOrders++;
+          rejectionReasons.push(event.reason);
           break;
         }
       }
     }
 
-    const position = portfolio.positions.get(symbol);
-    const markPrice = series.close[t + 1]!;
-    const equity = portfolio.cash + (position ? position.quantity * markPrice : 0);
-    equityCurve.push({ time: series.time[t + 1]!, equity });
+    equityCurve.push({
+      time: time[t + 1]!,
+      equity: portfolioEquity(portfolio, marksAt(series, t + 1)),
+    });
   }
 
-  return { portfolio, equityCurve, rejectedOrders };
+  return { portfolio, equityCurve, rejectedOrders, rejectionReasons };
 }
