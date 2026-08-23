@@ -1,15 +1,16 @@
-# swing-bot — Phase 0
+# swing-bot — Phase 1
 
-Fondations du bot de trading swing sur Kraken. Aucune stratégie, aucune
-exécution : uniquement la couche de données, le contrat de stratégie et les
-invariants qui empêchent un backtest d'être silencieusement faux.
+Bot de trading swing sur Kraken. La couche de données (Phase 0) et le moteur
+de backtest event-driven avec frais/slippage (Phase 1) sont en place, avec
+une stratégie de référence (croisement de moyennes mobiles) qui prouve que la
+mécanique tourne de bout en bout et est honnête sur les coûts de transaction.
 
 ## Démarrage
 
 ```bash
 npm i -D typescript @types/node
 npm run typecheck
-npm test          # 21 tests
+npm test          # 48 tests
 ```
 
 Node 22.6+ requis (type-stripping natif, pas de build step).
@@ -51,10 +52,25 @@ src/data/gaps.ts          Politique de trous (point de vérité unique)
 src/data/krakenCsv.ts     Parseur strict + chargement d'univers aligné
 src/strategy/types.ts     BarView, Strategy, Intent
 src/strategy/indicators.ts EMA, SMA, ATR, RollingStd — O(1) par barre
+src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
+src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
+src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
+src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades
+src/backtest/runner.ts    Runner event-driven : rejoue une série barre par barre
 ```
 
 ## Suite
 
-Phase 1 : boucle event-driven, modèle de frais (0,25 % maker / 0,40 % taker),
-slippage, exécution simulée. Critère de sortie : un croisement de moyennes
-mobiles tourne de bout en bout et **perd de l'argent** après frais.
+Phase 1 est terminée : boucle event-driven, modèle de frais (0,25 % maker /
+0,40 % taker), slippage, exécution simulée sur une seule paire (BTC/EUR).
+Critère de sortie démontré par `test/phase1.test.ts` : un croisement de
+moyennes mobiles tourne de bout en bout et **perd de l'argent** après frais.
+
+Hors périmètre, reporté à une phase ultérieure (voir la spec Phase 1,
+section « Hors périmètre ») :
+- Multi-paires / allocation de capital entre positions concurrentes.
+- Sizing fractionné (Phase 1 engage 100 % du cash disponible par entrée).
+- Ordres limites / distinction maker vs taker à l'exécution.
+- Slippage dépendant de la volatilité (ATR).
+- Live-runner (le module est conçu pour être réutilisable par lui, mais ne
+  l'implémente pas encore).

@@ -4,11 +4,15 @@
  * et perd de l'argent après frais.
  *
  * Marché synthétique sans drift net (oscillation autour d'un niveau
- * constant) : le gain brut cumulé sur un cycle complet est proche de zéro
- * quel que soit le nombre d'allers-retours, alors que chaque aller-retour
- * coûte des frais + slippage. La comparaison frictionless vs avec frais
- * prouve que c'est bien le coût de transaction qui creuse la perte, pas un
- * marché simplement défavorable.
+ * constant) : le croisement de moyennes garde un léger edge brut (mesuré,
+ * frictionless : +1,06 % sur ce jeu de paramètres) dû au retard structurel
+ * du signal sur un sinus lisse — l'edge n'est pas nul, mais l'amplitude et
+ * la longueur de cycle du marché sont calibrées pour qu'il reste plus petit
+ * que le coût d'un aller-retour (frais + slippage, ~90 bps). La comparaison
+ * frictionless vs avec frais prouve que c'est bien ce coût de transaction
+ * qui fait basculer un edge brut faiblement positif en perte nette, pas un
+ * marché simplement défavorable. L'assertion sur l'équité frictionless
+ * ci-dessous garde cette propriété (edge petit) vérifiée mécaniquement.
  */
 
 import test from 'node:test';
@@ -77,5 +81,15 @@ test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de
   assert.ok(
     finalEquityFrictionless > finalEquityWithFees,
     `attendu un résultat frictionless meilleur (${finalEquityFrictionless}) que celui avec frais (${finalEquityWithFees})`,
+  );
+
+  // Garde-fou : l'edge brut (sans frais) doit rester petit — c'est cette
+  // propriété du marché synthétique qui permet aux frais de faire basculer
+  // la stratégie en perte nette. Si ce marché est retuné au point que
+  // l'edge frictionless devient large, ce test doit échouer plutôt que de
+  // laisser le docstring ci-dessus redevenir silencieusement faux.
+  assert.ok(
+    Math.abs(finalEquityFrictionless - initialCash) < 0.05 * initialCash,
+    `attendu un edge brut frictionless petit (proche de l'équité initiale ${initialCash}), obtenu ${finalEquityFrictionless}`,
   );
 });

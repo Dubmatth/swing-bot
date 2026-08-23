@@ -68,9 +68,29 @@ export function runBacktest(
           };
           for (const intent of strategy.decide(ctx)) {
             if (intent.kind === 'enter') {
-              queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'buy', reason: intent.reason });
+              if (intent.symbol !== symbol) {
+                queue.push({
+                  kind: 'order-rejected',
+                  symbol: intent.symbol,
+                  side: 'buy',
+                  reason: 'symbole hors univers du runner',
+                  time: series.time[event.t]!,
+                });
+              } else {
+                queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'buy', reason: intent.reason });
+              }
             } else if (intent.kind === 'exit') {
-              queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'sell', reason: intent.reason });
+              if (intent.symbol !== symbol) {
+                queue.push({
+                  kind: 'order-rejected',
+                  symbol: intent.symbol,
+                  side: 'sell',
+                  reason: 'symbole hors univers du runner',
+                  time: series.time[event.t]!,
+                });
+              } else {
+                queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'sell', reason: intent.reason });
+              }
             }
           }
           break;
@@ -147,9 +167,9 @@ export function runBacktest(
     }
 
     const position = portfolio.positions.get(symbol);
-    const markPrice = series.close[t]!;
+    const markPrice = series.close[t + 1]!;
     const equity = portfolio.cash + (position ? position.quantity * markPrice : 0);
-    equityCurve.push({ time: series.time[t]!, equity });
+    equityCurve.push({ time: series.time[t + 1]!, equity });
   }
 
   return { portfolio, equityCurve, rejectedOrders };

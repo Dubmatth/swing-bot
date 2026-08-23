@@ -83,3 +83,28 @@ test('runBacktest : lève si la série est trop courte pour le warmup', () => {
   const strategy = alwaysFlipStrategy();
   assert.throws(() => runBacktest(series, strategy, EXEC_OPTS), /insuffisant/);
 });
+
+/** Émet toujours un `enter` pour un symbole étranger à la série du runner. */
+function foreignSymbolStrategy(): Strategy {
+  return {
+    name: 'test-foreign-symbol',
+    warmup: 1,
+    params: {},
+    decide(_ctx: StrategyContext) {
+      return [{ kind: 'enter', symbol: 'AUTRE-SYMBOLE', reason: 'test' } as const];
+    },
+  };
+}
+
+test('runBacktest : rejette un intent dont le symbole ne correspond pas à la série', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = seriesFrom(opens, closes, [0, 0, 0, 0]);
+  const strategy = foreignSymbolStrategy();
+
+  const result = runBacktest(series, strategy, EXEC_OPTS);
+
+  assert.ok(result.rejectedOrders > 0);
+  assert.equal(result.portfolio.trades.length, 0);
+  assert.equal(result.portfolio.positions.size, 0);
+});
