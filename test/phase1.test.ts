@@ -40,7 +40,7 @@ function oscillatingSeries(bars: number, base: number, amplitude: number, cycleL
 }
 
 test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de l'argent après frais", () => {
-  const series = oscillatingSeries(100, 100, 2, 10);
+  const series = oscillatingSeries(200, 100, 0.2, 20);
   const strategy = createMaCrossover({ symbol: SYMBOL, fast: 3, slow: 7 });
   const initialCash = 1000;
 
