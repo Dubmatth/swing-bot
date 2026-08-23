@@ -5,10 +5,15 @@
  * chaque barre coûte O(n·p) sur l'ensemble d'un backtest ; sur 2 400 backtests
  * × 20 paires, la différence n'est plus mesurée en millisecondes.
  *
- * Ces objets sont MUTABLES et donc réservés au calcul interne d'une stratégie.
- * La stratégie elle-même reste pure vis-à-vis de son contexte : elle
- * reconstruit ses indicateurs à chaque backtest depuis la même graine de
- * données, ce qui préserve le déterminisme.
+ * Ces objets sont MUTABLES. En pratique, le contrat de pureté de
+ * `Strategy.decide()` (voir `src/strategy/types.ts`) interdit aujourd'hui de
+ * les porter comme état persistant à l'intérieur d'une stratégie : ils
+ * doivent être reconstruits à neuf à chaque appel de `decide()` (voir
+ * `maCrossover.ts`), ce qui annule leur avantage O(1) incrémental côté
+ * stratégie. Piste de réconciliation possible : un cache d'indicateurs tenu
+ * par le moteur, indexé par `(symbole, t)` et exposé à la stratégie via
+ * `ctx`, pour garder le calcul incrémental sans exiger d'état mutable dans
+ * `decide()` lui-même.
  */
 
 export interface Indicator {

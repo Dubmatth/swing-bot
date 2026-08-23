@@ -85,8 +85,15 @@ une barre `t+1` disponible pour exécuter) :
 5. Sinon, `simulateBuy`/`simulateSell` (selon le côté) calcule prix après
    slippage, quantité et fee sur `series.open[t+1]`, produit `order-filled`,
    qui met à jour le `Portfolio` via `applyBuyFill`/`applySellFill`.
-6. Après traitement de la barre, enregistre un point de la courbe d'équité
-   (`equity = cash + position.quantity * series.close[t]` si position ouverte).
+6. Après traitement de la barre, enregistre un point de la courbe d'équité en
+   utilisant la barre `t+1` — celle sur laquelle un éventuel fill vient de
+   s'exécuter — plutôt que la barre `t` elle-même : `equity = cash +
+   position.quantity * series.close[t+1]` si position ouverte, horodaté
+   `series.time[t+1]`. Le point reflète ainsi l'état du portefeuille APRÈS le
+   fill de cette itération, au moment où il s'est réellement produit ; et la
+   dernière itération (`t = series.length - 2`) couvre du même coup la
+   dernière barre de la série, qui ne serait autrement jamais représentée
+   dans la courbe.
 
 Le runner est le seul endroit qui lit directement les colonnes `BarSeries`
 hors `BarView` — légitime puisqu'il ne prend aucune décision de trading, il
