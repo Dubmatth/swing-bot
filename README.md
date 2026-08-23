@@ -1,8 +1,9 @@
-# swing-bot — Phase 1
+# swing-bot — Phase 2
 
-Bot de trading swing sur Kraken. La couche de données (Phase 0) et le moteur
-de backtest event-driven avec frais/slippage (Phase 1) sont en place, avec
-une stratégie de référence (croisement de moyennes mobiles) qui prouve que la
+Bot de trading swing sur Kraken. La couche de données (Phase 0), le moteur de
+backtest event-driven avec frais/slippage (Phase 1) et le backtest
+multi-paires avec allocation de capital (Phase 2) sont en place, avec une
+stratégie de référence (croisement de moyennes mobiles) qui prouve que la
 mécanique tourne de bout en bout et est honnête sur les coûts de transaction.
 
 ## Démarrage
@@ -10,7 +11,7 @@ mécanique tourne de bout en bout et est honnête sur les coûts de transaction.
 ```bash
 npm i -D typescript @types/node
 npm run typecheck
-npm test          # 48 tests
+npm test          # 61 tests
 ```
 
 Node 22.6+ requis (type-stripping natif, pas de build step).
@@ -53,10 +54,11 @@ src/data/krakenCsv.ts     Parseur strict + chargement d'univers aligné
 src/strategy/types.ts     BarView, Strategy, Intent
 src/strategy/indicators.ts EMA, SMA, ATR, RollingStd — O(1) par barre
 src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
+src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
 src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
-src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades
-src/backtest/runner.ts    Runner event-driven : rejoue une série barre par barre
+src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades, équité (portfolioEquity)
+src/backtest/runner.ts    Runner event-driven multi-paires : rejoue les séries barre par barre, alloue le capital sous plafond de positions
 ```
 
 ## Suite
@@ -66,11 +68,18 @@ Phase 1 est terminée : boucle event-driven, modèle de frais (0,25 % maker /
 Critère de sortie démontré par `test/phase1.test.ts` : un croisement de
 moyennes mobiles tourne de bout en bout et **perd de l'argent** après frais.
 
-Hors périmètre, reporté à une phase ultérieure (voir la spec Phase 1,
-section « Hors périmètre ») :
-- Multi-paires / allocation de capital entre positions concurrentes.
-- Sizing fractionné (Phase 1 engage 100 % du cash disponible par entrée).
+Phase 2 est terminée : backtest multi-paires, `combineStrategies` pour
+assembler des stratégies mono-pair, allocation de capital sous
+`maxConcurrentPositions`. Critère de sortie démontré par
+`test/phase2.test.ts` : le multi-paires ne dépasse jamais le capital
+disponible — un dépassement du plafond de positions concurrentes est refusé
+proprement plutôt que d'engager plus de capital que disponible.
+
+Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1 et
+Phase 2, section « Hors périmètre ») :
+- Sizing par risque (ATR), plutôt que le partage égal du capital actuel.
 - Ordres limites / distinction maker vs taker à l'exécution.
-- Slippage dépendant de la volatilité (ATR).
 - Live-runner (le module est conçu pour être réutilisable par lui, mais ne
   l'implémente pas encore).
+- Backtest sur l'univers réel des 20 paires (les tests utilisent des séries
+  synthétiques).
