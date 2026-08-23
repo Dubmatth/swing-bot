@@ -7,6 +7,12 @@
  * chargées par le runner) — ce combinateur ne fait qu'appeler chaque
  * sous-stratégie avec le même `ctx` et concaténer leurs intentions. Chaque
  * sous-stratégie reste testable isolément, comme en Phase 1.
+ *
+ * Sous plafond de positions concurrentes saturé (voir runner.ts), l'ordre
+ * du tableau `strategies` devient la priorité de facto : la première
+ * sous-stratégie à émettre une intention actionnable sur une barre donnée
+ * est celle qui a une chance d'être exécutée si le plafond est atteint ce
+ * jour-là.
  */
 
 import type { Intent, Strategy, StrategyContext } from './types.ts';

@@ -176,3 +176,102 @@ test('runBacktest : rejette un signal au-delà du plafond de positions concurren
   assert.ok(result.rejectedOrders > 0);
   assert.ok(result.rejectionReasons.some((r) => r.includes('plafond')));
 });
+
+/** Émet enter(a) au démarrage, puis rotation exit(a)+enter(b) dans l'ordre donné dès que a est ouverte. */
+function rotateStrategy(a: string, b: string, exitFirst: boolean): Strategy {
+  return {
+    name: 'test-rotate',
+    warmup: 1,
+    params: {},
+    decide(ctx: StrategyContext) {
+      const hasA = ctx.positions.has(a);
+      const hasB = ctx.positions.has(b);
+      if (!hasA && !hasB) {
+        return [{ kind: 'enter', symbol: a, reason: 'init' }];
+      }
+      if (hasA && !hasB) {
+        const exitIntent: Intent = { kind: 'exit', symbol: a, reason: 'rotate' };
+        const enterIntent: Intent = { kind: 'enter', symbol: b, reason: 'rotate' };
+        return exitFirst ? [exitIntent, enterIntent] : [enterIntent, exitIntent];
+      }
+      return [{ kind: 'hold' }];
+    },
+  };
+}
+
+test('runBacktest : sous plafond saturé, exit avant enter dans la même barre permet la rotation', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([
+    ['AEUR', seriesFrom('AEUR', opens, closes, [0, 0, 0, 0])],
+    ['BEUR', seriesFrom('BEUR', opens, closes, [0, 0, 0, 0])],
+  ]);
+  const strategy = rotateStrategy('AEUR', 'BEUR', true);
+
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+  });
+
+  assert.equal(result.rejectedOrders, 0);
+  assert.equal(result.portfolio.trades.length, 3);
+  assert.equal(result.portfolio.positions.size, 1);
+  assert.ok(result.portfolio.positions.has('BEUR'));
+});
+
+test('runBacktest : sous plafond saturé, enter avant exit dans la même barre perd le signal (rejeté proprement)', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([
+    ['AEUR', seriesFrom('AEUR', opens, closes, [0, 0, 0, 0])],
+    ['BEUR', seriesFrom('BEUR', opens, closes, [0, 0, 0, 0])],
+  ]);
+  const strategy = rotateStrategy('AEUR', 'BEUR', false);
+
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+  });
+
+  assert.equal(result.rejectedOrders, 1);
+  assert.ok(result.rejectionReasons.some((r) => r.includes('plafond')));
+  assert.equal(result.portfolio.trades.length, 2);
+  assert.equal(result.portfolio.positions.size, 0);
+});
+
+test('runBacktest : appelle strategy.decide exactement une fois par barre (pas une fois par symbole)', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([
+    ['AEUR', seriesFrom('AEUR', opens, closes, [0, 0, 0, 0])],
+    ['BEUR', seriesFrom('BEUR', opens, closes, [0, 0, 0, 0])],
+  ]);
+  let calls = 0;
+  const strategy: Strategy = {
+    name: 'test-count-calls',
+    warmup: 1,
+    params: {},
+    decide(_ctx: StrategyContext) {
+      calls++;
+      return [{ kind: 'hold' }];
+    },
+  };
+
+  runBacktest(series, strategy, EXEC_OPTS);
+
+  // t de warmup(1) à length-2(2) inclus, sur 4 barres → 2 itérations, donc 2 appels.
+  assert.equal(calls, 2);
+});
+
+test('runBacktest : maxConcurrentPositions non entier lève', () => {
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, [100, 100, 110, 120], [100, 100, 110, 120], [0, 0, 0, 0])]]);
+  const strategy = rotateStrategy(SYMBOL, SYMBOL, true); // stratégie quelconque, jamais exécutée : le throw a lieu avant la boucle
+  assert.throws(
+    () => runBacktest(series, strategy, { ...EXEC_OPTS, maxConcurrentPositions: 1.5 }),
+    /maxConcurrentPositions/,
+  );
+});

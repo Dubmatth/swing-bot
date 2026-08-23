@@ -7,6 +7,9 @@
  * alimentera la même file depuis un flux temps réel — la logique
  * d'exécution et de portefeuille est déjà écrite pour être réutilisée
  * telle quelle.
+ *
+ * Discipline de file : voir events.ts — tout événement mutant (order-filled)
+ * passe avant tout événement en attente qui lit l'état du portefeuille.
  */
 
 import type { BarSeries } from '../data/series.ts';
@@ -53,7 +56,7 @@ export function runBacktest(
   if (series.size === 0) {
     throw new Error('runBacktest : au moins une série requise');
   }
-  if (!(opts.maxConcurrentPositions >= 1)) {
+  if (!Number.isInteger(opts.maxConcurrentPositions) || opts.maxConcurrentPositions < 1) {
     throw new RangeError(`maxConcurrentPositions invalide : ${opts.maxConcurrentPositions}`);
   }
 

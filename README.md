@@ -43,6 +43,7 @@ const { series, reports, commonStart } = await loadUniverse(UNIVERSE_SYMBOLS, {
 | Fichier corrompu détecté | Validation OHLC ligne à ligne | `un OHLC incohérent fait échouer` |
 | Délistage détecté | `validateUniverse` contre `/0/public/AssetPairs` | `un symbole délisté fait échouer` |
 | Alignement cross-sectionnel | `loadUniverse` réduit à l'intersection temporelle | — |
+| Capital jamais dépassé | Plafond `maxConcurrentPositions` + budget `min(cash, équité/N)` | `Phase 2 — critère de sortie : le multi-paires ne dépasse jamais le capital disponible` |
 
 ## Structure
 
@@ -78,6 +79,8 @@ proprement plutôt que d'engager plus de capital que disponible.
 Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1 et
 Phase 2, section « Hors périmètre ») :
 - Sizing par risque (ATR), plutôt que le partage égal du capital actuel.
+- Slippage dépendant de la volatilité (ATR), plutôt que le bps fixe actuel
+  (`src/backtest/execution.ts`).
 - Ordres limites / distinction maker vs taker à l'exécution.
 - Live-runner (le module est conçu pour être réutilisable par lui, mais ne
   l'implémente pas encore).

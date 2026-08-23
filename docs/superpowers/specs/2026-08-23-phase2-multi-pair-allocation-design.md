@@ -104,10 +104,17 @@ Pour chaque `t` :
    `equitySnapshot = portfolioEquity(portfolio, marksAt(t))` où
    `marksAt(t)` associe chaque symbole à `series.get(symbol).close[t]`.
    Cette photo sert de dénominateur pour **toutes** les entrées décidées
-   sur cette barre — pas de recalcul après chaque fill intra-barre.
-   Simplification assumée : la taille d'une position ne dépend que de
-   l'état connu à la clôture de la barre de décision, pas de l'ordre de
-   traitement des fills au sein de la même barre.
+   sur cette barre — pas de recalcul après chaque fill intra-barre. Le
+   budget reste toutefois plafonné par `portfolio.cash`, qui lui est lu en
+   direct (`budget = min(cash, equitySnapshot/N)`) : quand le cash
+   disponible tombe sous `equitySnapshot/N` en cours de barre (plusieurs
+   entrées concurrentes, positions déjà partiellement engagées), la taille
+   des entrées suivantes de la même barre dépend de l'ordre de traitement
+   des fills — ce n'est pas une fraction strictement fixe dans ce cas. Choix
+   assumé : le plafonnement par le cash réel est ce qui garantit l'invariant
+   de capital (jamais de dépassement), au prix de cette dépendance à l'ordre
+   dans le cas saturé. Voir aussi `combineStrategies` : l'ordre des
+   sous-stratégies devient la priorité de facto sous plafond saturé.
 2. `ctx.views` construit avec **toutes** les paires (`new BarView(series.get(s)!, t)`
    pour chaque `s`), `ctx.positions = portfolio.positions`,
    `ctx.now = time[t]` (identique sur toutes les séries par construction).
