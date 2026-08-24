@@ -5,6 +5,7 @@ import {
   applyBuyFill,
   applySellFill,
   createPortfolio,
+  portfolioEquity,
 } from '../src/backtest/portfolio.ts';
 import type { Fill } from '../src/backtest/execution.ts';
 
@@ -70,4 +71,35 @@ test('applySellFill : vente sans position ouverte lève', () => {
   const p = createPortfolio(1000);
   const fill: Fill = { price: 100, quantity: 1, fee: 1 };
   assert.throws(() => applySellFill(p, 'TESTEUR', fill, 1), /[Aa]ucune position/);
+});
+
+test('portfolioEquity : cash seul quand aucune position ouverte', () => {
+  const p = createPortfolio(1000);
+  assert.equal(portfolioEquity(p, new Map()), 1000);
+});
+
+test('portfolioEquity : cash + valeur de marché des positions ouvertes', () => {
+  const p = createPortfolio(1000);
+  applyBuyFill(p, 'AEUR', { price: 100, quantity: 5, fee: 10 }, 1);
+  applyBuyFill(p, 'BEUR', { price: 50, quantity: 4, fee: 5 }, 1);
+  const marks = new Map([
+    ['AEUR', 110],
+    ['BEUR', 40],
+  ]);
+  const expectedCash = 1000 - (5 * 100 + 10) - (4 * 50 + 5);
+  const expected = expectedCash + 5 * 110 + 4 * 40;
+  assert.ok(Math.abs(portfolioEquity(p, marks) - expected) < 1e-9);
+});
+
+test('portfolioEquity : prix de marque manquant pour une position ouverte lève', () => {
+  const p = createPortfolio(1000);
+  applyBuyFill(p, 'AEUR', { price: 100, quantity: 5, fee: 10 }, 1);
+  assert.throws(() => portfolioEquity(p, new Map()), /marque/);
+});
+
+test('applyBuyFill : un fill dont le coût est NaN lève plutôt que de corrompre le cash', () => {
+  const p = createPortfolio(1000);
+  const fill: Fill = { price: Infinity, quantity: 0, fee: NaN };
+  assert.throws(() => applyBuyFill(p, 'TESTEUR', fill, 1), /dépasse le cash/);
+  assert.equal(p.cash, 1000);
 });

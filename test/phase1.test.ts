@@ -48,10 +48,12 @@ test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de
   const strategy = createMaCrossover({ symbol: SYMBOL, fast: 3, slow: 7 });
   const initialCash = 1000;
 
-  const withFees = runBacktest(series, strategy, {
+  const seriesMap = new Map([[SYMBOL, series]]);
+  const withFees = runBacktest(seriesMap, strategy, {
     initialCash,
     fees: DEFAULT_FEES,
     slippageBps: 5,
+    maxConcurrentPositions: 1,
   });
 
   assert.ok(
@@ -69,10 +71,11 @@ test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de
     `attendu une perte nette après frais, équité finale ${finalEquityWithFees} vs cash initial ${initialCash}`,
   );
 
-  const frictionless = runBacktest(series, strategy, {
+  const frictionless = runBacktest(seriesMap, strategy, {
     initialCash,
     fees: { makerBps: 0, takerBps: 0 },
     slippageBps: 0,
+    maxConcurrentPositions: 1,
   });
   const finalEquityFrictionless =
     frictionless.portfolio.cash +
