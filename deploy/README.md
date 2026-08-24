@@ -4,6 +4,10 @@ Runner de trading papier tournant en continu, indépendamment du Mac, via
 un service `systemd` qui redémarre automatiquement (crash, reboot du
 serveur).
 
+Pas encore à l'aise avec SSH ? Voir
+[`ssh-cheatsheet.md`](ssh-cheatsheet.md) — chaque commande utilisée dans ce
+guide y est expliquée en détail.
+
 ## 1. Créer le serveur (Hetzner Cloud Console)
 
 - Emplacement : Falkenstein ou Nuremberg (Allemagne).
