@@ -60,7 +60,7 @@ function buildParamGrid(): MaCrossoverParams[] {
 }
 
 test("Phase 4 — critère de sortie : le walk-forward révèle l'overfitting plutôt que de le masquer", () => {
-  const series = new Map([[SYMBOL, lcgNoiseSeries(400, 42, 100, 1.5)]]);
+  const series = new Map([[SYMBOL, lcgNoiseSeries(400, 2024, 100, 1.5)]]);
   const paramGrid = buildParamGrid();
 
   const result = runWalkForward(series, {
@@ -87,9 +87,16 @@ test("Phase 4 — critère de sortie : le walk-forward révèle l'overfitting pl
   const meanOutOfSample =
     result.folds.reduce((sum, f) => sum + f.outOfSampleReturn, 0) / result.folds.length;
 
+  const foldDetails = result.folds
+    .map(
+      (f) =>
+        `fold ${f.foldIndex}: in=${f.inSampleReturn.toFixed(5)} out=${f.outOfSampleReturn.toFixed(5)} params=${JSON.stringify(f.selectedParams)}`,
+    )
+    .join(' | ');
+
   assert.ok(
     meanInSample > meanOutOfSample,
     `attendu in-sample (${meanInSample}) > hors échantillon (${meanOutOfSample}) — ` +
-      `signature attendue de l'overfitting sur données sans edge réel`,
+      `signature attendue de l'overfitting sur données sans edge réel. Détail par fold : ${foldDetails}`,
   );
 });
