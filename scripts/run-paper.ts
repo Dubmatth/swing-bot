@@ -36,6 +36,14 @@ const STATE_DIR = join(process.cwd(), 'data', 'live-state');
 const PORTFOLIO_PATH = join(STATE_DIR, 'portfolio.json');
 const TRADES_PATH = join(STATE_DIR, 'trades.jsonl');
 
+/**
+ * Délai maximal accordé aux écritures de persistance en cours pour se
+ * terminer avant de forcer l'arrêt du processus sur SIGINT/SIGTERM — sans
+ * ça, un fill qui vient juste d'avoir lieu pourrait ne jamais être
+ * persisté lors d'un arrêt propre.
+ */
+const SHUTDOWN_PERSISTENCE_TIMEOUT_MS = 5000;
+
 async function main(): Promise<void> {
   console.log(`Résolution des mappings de paires (${UNIVERSE.length} paires)...`);
   const mappings = await fetchKrakenPairMappings(UNIVERSE);
@@ -74,6 +82,14 @@ async function main(): Promise<void> {
   console.log("Chargement de l'état persisté...");
   const portfolio = (await loadPortfolioSnapshot(PORTFOLIO_PATH)) ?? createPortfolio(10000);
 
+  // Écritures de persistance en cours, suivies pour que shutdown() puisse les
+  // attendre (avec timeout) avant de terminer le processus — voir plus bas.
+  const pendingPersistence = new Set<Promise<void>>();
+  function trackPersistence(promise: Promise<void>): void {
+    pendingPersistence.add(promise);
+    void promise.finally(() => pendingPersistence.delete(promise));
+  }
+
   const runner = createPaperRunner({
     strategy,
     sources,
@@ -90,9 +106,23 @@ async function main(): Promise<void> {
       // Écritures « fire-and-forget » : suffisant vu la fréquence de trading
       // très faible de la stratégie candidate (quelques trades par mois sur
       // 20 paires). Le journal JSONL reste la trace d'audit qui ne perd
-      // jamais un trade même si le snapshot accuse un léger retard.
-      void savePortfolioSnapshot(PORTFOLIO_PATH, p);
-      void appendTradeLog(TRADES_PATH, trade);
+      // jamais un trade même si le snapshot accuse un léger retard. Chaque
+      // écriture est cependant suivie (trackPersistence) et dotée d'un
+      // .catch : un incident I/O récupérable (disque plein, permission
+      // refusée) ne doit jamais faire planter tout le processus — le
+      // rejet d'une promesse non gérée termine le processus par défaut
+      // depuis Node 15, ce qui tuerait toutes les connexions WebSocket
+      // ouvertes pour une seule écriture manquée.
+      trackPersistence(
+        savePortfolioSnapshot(PORTFOLIO_PATH, p).catch((err: unknown) => {
+          console.error('Échec de la sauvegarde du snapshot de portefeuille :', err);
+        }),
+      );
+      trackPersistence(
+        appendTradeLog(TRADES_PATH, trade).catch((err: unknown) => {
+          console.error(`Échec de l'écriture du journal de trades (${trade.symbol}) :`, err);
+        }),
+      );
     },
   });
 
@@ -102,7 +132,19 @@ async function main(): Promise<void> {
   const shutdown = (): void => {
     console.log('Arrêt en cours...');
     runner.stop();
-    process.exit(0);
+    // Laisse les écritures de persistance déclenchées par un fill tout juste
+    // survenu se terminer avant de quitter — sans ça, un SIGINT/SIGTERM
+    // propre pourrait sortir avant l'écriture du snapshot et perdre
+    // silencieusement la toute dernière mise à jour. Timeout de secours au
+    // cas où une écriture reste bloquée (ex. disque hors service) : un arrêt
+    // propre ne doit jamais devenir un arrêt qui ne se termine jamais.
+    const pending = Promise.all(pendingPersistence);
+    const timeout = new Promise<void>((resolve) => {
+      setTimeout(resolve, SHUTDOWN_PERSISTENCE_TIMEOUT_MS);
+    });
+    void Promise.race([pending, timeout]).then(() => {
+      process.exit(0);
+    });
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
