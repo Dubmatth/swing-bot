@@ -92,3 +92,42 @@ test('decide : symbole absent du contexte renvoie hold sans lever', () => {
   assert.doesNotThrow(() => s.decide(ctx));
   assert.equal(s.decide(ctx)[0]?.kind, 'hold');
 });
+
+test('createMeanReversion : warmup vaut max(period, trendPeriod), params exposés', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, trendPeriod: 10 });
+  assert.equal(s.warmup, 10);
+  assert.deepEqual(s.params, { period: 4, entryK: 1, trendPeriod: 10 });
+});
+
+test('createMeanReversion : trendPeriod <= period lève', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, trendPeriod: 4 }),
+    /trendPeriod/,
+  );
+});
+
+test('decide : le filtre de tendance bloque une entrée en tendance baissière de fond', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1, trendPeriod: 6 });
+  // Baisse continue : le seuil d'entrée à court terme est franchi, mais le
+  // prix reste sous la moyenne longue (tendance baissière confirmée).
+  const ctx = ctxFor([100, 95, 90, 85, 80, 75, 70, 65, 60]);
+  assert.equal(s.decide(ctx)[0]?.kind, 'hold');
+});
+
+test('decide : le filtre de tendance autorise une entrée quand le prix reste au-dessus de la moyenne longue', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1, trendPeriod: 6 });
+  // Un creux plus profond plus tôt tire la moyenne longue sous le prix
+  // courant : le repli récent reste un creux local, pas une tendance de fond.
+  const ctx = ctxFor([100, 100, 100, 50, 100, 100, 100, 100, 95]);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter');
+});
+
+test('decide : sans trendPeriod, le même repli en tendance baissière déclenche quand même une entrée', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1 });
+  const ctx = ctxFor([100, 95, 90, 85, 80, 75, 70, 65, 60]);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter');
+});

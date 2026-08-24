@@ -19,6 +19,15 @@ export interface MeanReversionParams {
   readonly period: number;
   /** Multiplicateur d'écart-type du seuil d'entrée. */
   readonly entryK: number;
+  /**
+   * Période d'une moyenne longue utilisée comme filtre de tendance. Sans
+   * elle (défaut), aucun filtre : la stratégie achète tout creux qui
+   * franchit le seuil, y compris en tendance baissière de fond — le risque
+   * classique de la réversion à la moyenne ("attraper un couteau qui
+   * tombe"). Avec elle, un creux n'est acheté que si le prix reste
+   * au-dessus de cette moyenne longue. N'affecte jamais la sortie.
+   */
+  readonly trendPeriod?: number;
 }
 
 function sma(view: BarView, period: number): number {
@@ -38,18 +47,23 @@ function std(view: BarView, period: number): number {
 }
 
 export function createMeanReversion(params: MeanReversionParams): Strategy {
-  const { symbol, period, entryK } = params;
+  const { symbol, period, entryK, trendPeriod } = params;
   if (!Number.isInteger(period) || period < 2) {
     throw new RangeError(`Période invalide : ${period}`);
   }
   if (!(entryK > 0)) {
     throw new RangeError(`entryK invalide : ${entryK}`);
   }
+  if (trendPeriod !== undefined && (!Number.isInteger(trendPeriod) || trendPeriod <= period)) {
+    throw new RangeError(`trendPeriod invalide : ${trendPeriod} (doit être > period=${period})`);
+  }
+
+  const warmup = trendPeriod !== undefined ? Math.max(period, trendPeriod) : period;
 
   return {
     name: 'mean-reversion',
-    warmup: period,
-    params: { period, entryK },
+    warmup,
+    params: { period, entryK, ...(trendPeriod !== undefined ? { trendPeriod } : {}) },
     decide(ctx: StrategyContext): readonly Intent[] {
       const view = ctx.views.get(symbol);
       if (!view) return [{ kind: 'hold' }];
@@ -59,8 +73,9 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
       const price = view.close(0);
       const hasPosition = ctx.positions.has(symbol);
       const threshold = smaVal - entryK * stdVal;
+      const trendOk = trendPeriod === undefined || price > sma(view, trendPeriod);
 
-      if (!hasPosition && price < threshold) {
+      if (!hasPosition && price < threshold && trendOk) {
         return [{
           kind: 'enter',
           symbol,
