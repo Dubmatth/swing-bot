@@ -158,3 +158,46 @@ test('runWalkForward : lève si la série est trop courte pour un seul fold', ()
     /insuffisant/,
   );
 });
+
+test('runWalkForward : lève si aucun jeu de paramètres ne produit un rendement in-sample fini', () => {
+  // Prix d'ouverture corrompu (Infinity) sur la barre 3 : une stratégie qui
+  // entre en position à t=1 puis sort à t=2 déclenche un fill de vente au
+  // prix Infinity. `applySellFill` calcule alors
+  // `cash += quantity*Infinity - Infinity`, soit `Infinity - Infinity = NaN`
+  // — le cash du portefeuille devient NaN sans qu'aucun garde-fou
+  // (`simulateSell`, `applySellFill`) ne lève, puisque Infinity est un prix
+  // de référence positif valide à leurs yeux. L'équité finale et donc
+  // `inSampleReturn` sont NaN. Ceci exerce bien le nouveau garde-fou
+  // `bestParams === undefined` de `runWalkForward` — pas la validation de
+  // `createPortfolio`/`totalReturn` (celles-ci lèvent sur des entrées
+  // invalides comme `initialCash <= 0`, elles ne produisent jamais un
+  // résultat non fini à partir d'entrées valides).
+  const closes = [100, 100, 100, Infinity, 100, 100, 100, 100, 100, 100, 100, 100];
+  const series = new Map([[SYMBOL, seriesFrom(closes)]]);
+
+  const strategy: Strategy = {
+    name: 'nan-inducer',
+    warmup: 1,
+    params: {},
+    decide(ctx: StrategyContext) {
+      const t = ctx.views.get(SYMBOL)!.t;
+      if (t === 1) return [{ kind: 'enter', symbol: SYMBOL, reason: 'test' }];
+      if (t === 2 && ctx.positions.has(SYMBOL)) {
+        return [{ kind: 'exit', symbol: SYMBOL, reason: 'test' }];
+      }
+      return [{ kind: 'hold' }];
+    },
+  };
+
+  assert.throws(
+    () =>
+      runWalkForward(series, {
+        trainBars: 6,
+        testBars: 6,
+        paramGrid: [{ mode: 'flat' as const }],
+        strategyFactory: () => strategy,
+        backtestOptions: BACKTEST_OPTIONS,
+      }),
+    /aucun rendement in-sample fini/,
+  );
+});

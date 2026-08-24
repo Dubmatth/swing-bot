@@ -62,9 +62,24 @@ export function runWalkForward<P>(
     throw new RangeError(`testBars invalide : ${config.testBars}`);
   }
 
-  const length = [...series.values()][0]?.length;
-  if (length === undefined) {
+  const entries = [...series];
+  const firstEntry = entries[0];
+  if (firstEntry === undefined) {
     throw new Error('runWalkForward : au moins une série requise');
+  }
+  const [firstSymbol, firstSeries] = firstEntry;
+  const length = firstSeries.length;
+  for (const [symbol, s] of entries) {
+    if (s.length !== length) {
+      throw new Error(
+        `Grille temporelle incohérente : ${symbol} a ${s.length} barre(s), ${firstSymbol} en a ${length}`,
+      );
+    }
+    if (s.time[0] !== firstSeries.time[0] || s.time[length - 1] !== firstSeries.time[length - 1]) {
+      throw new Error(
+        `Grille temporelle incohérente entre ${symbol} et ${firstSymbol} : bornes temporelles différentes`,
+      );
+    }
   }
 
   const folds: FoldResult<P>[] = [];
@@ -76,16 +91,22 @@ export function runWalkForward<P>(
     if (testTo > length) break;
 
     const trainSeries = sliceMap(series, trainFrom, trainTo);
-    let bestParams: P = config.paramGrid[0]!;
+    let bestParams: P | undefined;
     let bestReturn = -Infinity;
     for (const params of config.paramGrid) {
       const strategy = config.strategyFactory(params);
       const trainResult = runBacktest(trainSeries, strategy, config.backtestOptions);
       const inSampleReturn = totalReturn(trainResult.equityCurve, config.backtestOptions.initialCash);
-      if (inSampleReturn > bestReturn) {
+      if (Number.isFinite(inSampleReturn) && inSampleReturn > bestReturn) {
         bestReturn = inSampleReturn;
         bestParams = params;
       }
+    }
+    if (bestParams === undefined) {
+      throw new Error(
+        `runWalkForward : aucun rendement in-sample fini sur le fold ${foldIndex} ` +
+          `(${config.paramGrid.length} jeu(x) de paramètres testés)`,
+      );
     }
 
     const testSeries = sliceMap(series, testFrom, testTo);

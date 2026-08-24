@@ -21,3 +21,9 @@ test('totalReturn : rendement négatif si perte', () => {
 test('totalReturn : lève si equityCurve est vide', () => {
   assert.throws(() => totalReturn([], 1000), /vide/);
 });
+
+test('totalReturn : lève si initialCash est invalide', () => {
+  const curve: EquityPoint[] = [{ time: 0, equity: 1000 }];
+  assert.throws(() => totalReturn(curve, 0), /initialCash/);
+  assert.throws(() => totalReturn(curve, -100), /initialCash/);
+});

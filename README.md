@@ -115,3 +115,8 @@ Phase 2, Phase 3 et Phase 4, section « Hors périmètre ») :
   rendement total, conçu pour être étendu sans retoucher le reste.
 - Fenêtre ancrée/croissante (anchored/expanding window) : `runWalkForward`
   n'implémente que des fenêtres glissantes à taille fixe.
+- Fenêtre de test « à froid » : `runWalkForward` ne fait pas précéder la
+  fenêtre de test d'un historique de warmup pris dans la fenêtre
+  d'entraînement — la mesure hors échantillon perd donc jusqu'à
+  `strategy.warmup` barres effectives, un effet plus sensible avec un
+  warmup grand relativement à `testBars`.

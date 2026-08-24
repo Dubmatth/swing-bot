@@ -29,6 +29,13 @@ Hors périmètre (reporté) :
   telle quelle.
 - Backtest sur l'univers réel des 20 paires (toujours hors périmètre,
   bloqué sur l'obtention des CSV Kraken).
+- Fenêtre de test « à froid » (pas de préfixe de warmup pris dans la
+  fenêtre d'entraînement) — la mesure hors échantillon perd jusqu'à
+  `strategy.warmup` barres effectives par fold. Vérifié comme
+  n'invalidant pas le critère de sortie de cette phase (robuste à la
+  normalisation par horizon et à des fenêtres symétriques), mais une
+  vraie limitation pour un usage futur sur des données réelles à warmup
+  plus grand.
 
 ## Décisions actées
 

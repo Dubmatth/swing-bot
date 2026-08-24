@@ -7,6 +7,9 @@
 import type { EquityPoint } from './runner.ts';
 
 export function totalReturn(equityCurve: readonly EquityPoint[], initialCash: number): number {
+  if (!(initialCash > 0)) {
+    throw new RangeError(`totalReturn : initialCash invalide : ${initialCash}`);
+  }
   if (equityCurve.length === 0) {
     throw new Error('totalReturn : equityCurve vide');
   }
