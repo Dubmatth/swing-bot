@@ -1,18 +1,19 @@
-# swing-bot — Phase 3
+# swing-bot — Phase 4
 
 Bot de trading swing sur Kraken. La couche de données (Phase 0), le moteur de
 backtest event-driven avec frais/slippage (Phase 1), le backtest
-multi-paires avec allocation de capital (Phase 2) et le sizing par risque
-ATR (Phase 3) sont en place, avec une stratégie de référence (croisement de
-moyennes mobiles) qui prouve que la mécanique tourne de bout en bout et est
-honnête sur les coûts de transaction.
+multi-paires avec allocation de capital (Phase 2), le sizing par risque ATR
+(Phase 3) et la validation walk-forward (Phase 4) sont en place, avec une
+stratégie de référence (croisement de moyennes mobiles) qui prouve que la
+mécanique tourne de bout en bout et est honnête sur les coûts de
+transaction.
 
 ## Démarrage
 
 ```bash
 npm i -D typescript @types/node
 npm run typecheck
-npm test          # 81 tests
+npm test          # 90 tests
 ```
 
 Node 22.6+ requis (type-stripping natif, pas de build step).
@@ -46,6 +47,7 @@ const { series, reports, commonStart } = await loadUniverse(UNIVERSE_SYMBOLS, {
 | Alignement cross-sectionnel | `loadUniverse` réduit à l'intersection temporelle | — |
 | Capital jamais dépassé | Plafond `maxConcurrentPositions` + budget `min(cash, équité/N)` | `Phase 2 — critère de sortie : le multi-paires ne dépasse jamais le capital disponible` |
 | Plafond fraction fixe jamais dépassé, même avec sizing par risque | Budget par risque plafonné par `Math.min` contre le budget fraction fixe | `Phase 3 — critère de sortie : le sizing par risque normalise l'exposition entre paires de volatilité différente` |
+| Le walk-forward révèle l'overfitting plutôt que de le masquer | Sélection des paramètres bornée à la fenêtre d'entraînement, mesure sur la fenêtre suivante non vue | `Phase 4 — critère de sortie : le walk-forward révèle l'overfitting plutôt que de le masquer` |
 
 ## Structure
 
@@ -63,6 +65,8 @@ src/backtest/events.ts    Événements typés de la file (bar-closed → order-*
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
 src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades, équité (portfolioEquity)
 src/backtest/runner.ts    Runner event-driven multi-paires : rejoue les séries barre par barre, alloue le capital sous plafond de positions
+src/backtest/metrics.ts   Métriques de performance depuis la courbe d'équité (rendement total)
+src/backtest/walkForward.ts Validation walk-forward : recherche de grille sur fenêtre d'entraînement, mesure hors échantillon sur la fenêtre suivante
 ```
 
 ## Suite
@@ -86,8 +90,17 @@ Phase 2. Critère de sortie démontré par `test/phase3.test.ts` : le sizing
 par risque normalise l'exposition entre paires de volatilité différente,
 sans jamais dépasser le plafond fraction fixe.
 
+Phase 4 est terminée : `totalReturn` (`src/backtest/metrics.ts`) et
+`runWalkForward` (`src/backtest/walkForward.ts`), validation walk-forward
+générique par recherche de grille sur fenêtres glissantes entraînement/test.
+Critère de sortie démontré par `test/phase4.test.ts` : sur un marché
+synthétique sans edge réel, le rendement moyen in-sample sélectionné par
+recherche sur une grille de 48 combinaisons dépasse le rendement moyen hors
+échantillon des mêmes paramètres — le walk-forward révèle l'overfitting
+plutôt que de le masquer.
+
 Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1,
-Phase 2 et Phase 3, section « Hors périmètre ») :
+Phase 2, Phase 3 et Phase 4, section « Hors périmètre ») :
 - Stop-loss réellement exécuté : `stopDistance` sert uniquement au calcul
   de la taille de position, aucun ordre stop n'est simulé — une position
   n'est encore fermée que par un `Intent` `'exit'` émis par la stratégie.
@@ -98,3 +111,7 @@ Phase 2 et Phase 3, section « Hors périmètre ») :
   l'implémente pas encore).
 - Backtest sur l'univers réel des 20 paires (les tests utilisent des séries
   synthétiques).
+- Métriques Sharpe / drawdown : `metrics.ts` n'expose pour l'instant que le
+  rendement total, conçu pour être étendu sans retoucher le reste.
+- Fenêtre ancrée/croissante (anchored/expanding window) : `runWalkForward`
+  n'implémente que des fenêtres glissantes à taille fixe.
