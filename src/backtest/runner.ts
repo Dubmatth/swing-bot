@@ -169,7 +169,7 @@ export function runBacktest(
             }
             budget = Math.min(portfolio.cash, equitySnapshot / opts.maxConcurrentPositions);
             if (event.stopDistance !== undefined) {
-              if (!(event.stopDistance > 0)) {
+              if (!Number.isFinite(event.stopDistance) || !(event.stopDistance > 0)) {
                 queue.push({
                   kind: 'order-rejected',
                   symbol: event.symbol,

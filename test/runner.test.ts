@@ -359,3 +359,44 @@ test('runBacktest : rejette proprement un stopDistance invalide plutôt que de p
   assert.ok(result.rejectedOrders > 0);
   assert.ok(result.rejectionReasons.some((r) => r.includes('stopDistance')));
 });
+
+test('runBacktest : rejette proprement un stopDistance infini plutôt que de le laisser fuiter dans le calcul de budget', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, opens, closes, [0, 0, 0, 0])]]);
+  const strategy = enterWithStopStrategy(Infinity);
+
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.01,
+  });
+
+  assert.equal(result.portfolio.trades.length, 0);
+  assert.ok(result.rejectedOrders > 0);
+  assert.ok(result.rejectionReasons.some((r) => r.includes('stopDistance')));
+});
+
+test('runBacktest : le plafond fraction fixe gagne quand le budget par risque serait plus grand', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, opens, closes, [0, 0, 0, 0])]]);
+  // stopDistance très petit + riskPerTradePct généreux → riskBudget très grand,
+  // largement au-dessus du plafond fraction fixe (cash=1000, maxConcurrentPositions=1 → 1000).
+  const strategy = enterWithStopStrategy(0.01);
+
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.5,
+  });
+
+  assert.equal(result.portfolio.trades.length, 1);
+  const expectedFill = simulateBuy(1000, 110, { fees: DEFAULT_FEES, slippageBps: 10 });
+  assert.ok(Math.abs((result.portfolio.trades[0]?.price ?? 0) - expectedFill.price) < 1e-9);
+  assert.ok(Math.abs((result.portfolio.trades[0]?.quantity ?? 0) - expectedFill.quantity) < 1e-9);
+});
