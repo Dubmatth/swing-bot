@@ -36,7 +36,7 @@ export interface OhlcMessage {
   readonly trades: number;
 }
 
-interface TrackedBar {
+export interface TrackedBar {
   readonly intervalBegin: number;
   readonly open: number;
   readonly high: number;
@@ -44,6 +44,18 @@ interface TrackedBar {
   readonly close: number;
   readonly volume: number;
   readonly trades: number;
+}
+
+function toTrackedBar(msg: OhlcMessage): TrackedBar {
+  return {
+    intervalBegin: msg.intervalBegin,
+    open: msg.open,
+    high: msg.high,
+    low: msg.low,
+    close: msg.close,
+    volume: msg.volume,
+    trades: msg.trades,
+  };
 }
 
 /**
@@ -59,15 +71,7 @@ export function processOhlcMessage(
   const current = tracked.get(msg.symbol);
 
   if (current === undefined || msg.intervalBegin === current.intervalBegin) {
-    tracked.set(msg.symbol, {
-      intervalBegin: msg.intervalBegin,
-      open: msg.open,
-      high: msg.high,
-      low: msg.low,
-      close: msg.close,
-      volume: msg.volume,
-      trades: msg.trades,
-    });
+    tracked.set(msg.symbol, toTrackedBar(msg));
     return null;
   }
 
@@ -85,16 +89,81 @@ export function processOhlcMessage(
     volume: current.volume,
     trades: current.trades,
   };
-  tracked.set(msg.symbol, {
-    intervalBegin: msg.intervalBegin,
-    open: msg.open,
-    high: msg.high,
-    low: msg.low,
-    close: msg.close,
-    volume: msg.volume,
-    trades: msg.trades,
-  });
+  tracked.set(msg.symbol, toTrackedBar(msg));
   return closed;
+}
+
+/**
+ * Traite un lot de messages OHLC déjà validés — un ou plusieurs, selon
+ * qu'il s'agit du message "snapshot" initial ou d'un message "update" en
+ * temps réel. Fonction pure, testable sans réseau ; ne mute que `tracked`.
+ *
+ * Le snapshot initial de Kraken WS v2 (souscription avec `snapshot: true`)
+ * renvoie plusieurs bougies historiques (vérifié empiriquement : jusqu'à 10
+ * bougies passées, pas seulement la bougie en cours) — déjà couvertes par
+ * l'amorçage REST (krakenRestSeed.ts). Les rejouer comme des ClosedBar
+ * percuterait l'historique déjà amorcé (timestamp non strictement
+ * croissant). Seule la dernière entrée (la plus récente, présumée encore
+ * en cours) amorce le suivi de clôture pour les prochains messages
+ * "update" ; rien n'est émis pour un snapshot.
+ */
+export function handleOhlcMessages(
+  tracked: Map<string, TrackedBar>,
+  messageType: unknown,
+  messages: readonly OhlcMessage[],
+): readonly ClosedBar[] {
+  if (messages.length === 0) return [];
+
+  if (messageType === 'snapshot') {
+    const last = messages[messages.length - 1]!;
+    tracked.set(last.symbol, toTrackedBar(last));
+    return [];
+  }
+
+  const closedBars: ClosedBar[] = [];
+  for (const message of messages) {
+    const closed = processOhlcMessage(tracked, message);
+    if (closed) closedBars.push(closed);
+  }
+  return closedBars;
+}
+
+/**
+ * Parse et valide une entrée OHLC brute d'un message réseau — fonction
+ * pure, testable sans réseau. Renvoie `undefined` sur toute forme ou
+ * valeur inattendue plutôt que de lever (une trame invalide est ignorée,
+ * jamais une exception).
+ */
+export function parseOhlcEntry(symbol: string, entry: unknown): OhlcMessage | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined;
+  const e = entry as Record<string, unknown>;
+  if (
+    typeof e.interval_begin !== 'string' ||
+    typeof e.open !== 'number' ||
+    typeof e.high !== 'number' ||
+    typeof e.low !== 'number' ||
+    typeof e.close !== 'number' ||
+    typeof e.volume !== 'number' ||
+    typeof e.trades !== 'number'
+  ) {
+    return undefined;
+  }
+
+  const intervalBegin = parseIntervalBeginToEpochSeconds(e.interval_begin);
+  if (!isValidOhlcEntry(intervalBegin, e.open, e.high, e.low, e.close)) {
+    return undefined;
+  }
+
+  return {
+    symbol,
+    intervalBegin,
+    open: e.open,
+    high: e.high,
+    low: e.low,
+    close: e.close,
+    volume: e.volume,
+    trades: e.trades,
+  };
 }
 
 const DEFAULT_WS_URL = 'wss://ws.kraken.com/v2';
@@ -173,55 +242,37 @@ export function createKrakenOhlcSource(config: KrakenOhlcSourceConfig): LiveBarS
       const data = (parsed as { data: unknown }).data;
       if (!Array.isArray(data)) return;
 
+      const messages: OhlcMessage[] = [];
       for (const entry of data) {
-        if (typeof entry !== 'object' || entry === null) continue;
-        const e = entry as Record<string, unknown>;
-        if (
-          typeof e.interval_begin !== 'string' ||
-          typeof e.open !== 'number' ||
-          typeof e.high !== 'number' ||
-          typeof e.low !== 'number' ||
-          typeof e.close !== 'number' ||
-          typeof e.volume !== 'number' ||
-          typeof e.trades !== 'number'
-        ) {
-          continue;
-        }
-
-        const intervalBegin = parseIntervalBeginToEpochSeconds(e.interval_begin);
-        if (!isValidOhlcEntry(intervalBegin, e.open, e.high, e.low, e.close)) {
+        const message = parseOhlcEntry(config.symbol, entry);
+        if (message) {
+          messages.push(message);
+        } else {
           console.error(
             `KrakenOhlcSource(${config.symbol}) : trame OHLC invalide, ignorée`,
           );
-          continue;
         }
+      }
+      if (messages.length === 0) return;
 
-        const message: OhlcMessage = {
-          symbol: config.symbol,
-          intervalBegin,
-          open: e.open,
-          high: e.high,
-          low: e.low,
-          close: e.close,
-          volume: e.volume,
-          trades: e.trades,
-        };
-        // Le backoff de reconnexion n'est réinitialisé qu'ici, pas dans le
-        // handler `open` : un serveur qui accepte la connexion puis la ferme
-        // aussitôt (rate limiting, abonnement rejeté) ne doit pas repartir à
-        // 1s indéfiniment. Recevoir un message OHLC exploitable est la seule
-        // preuve que l'abonnement fonctionne réellement.
-        reconnectDelay = RECONNECT_BASE_DELAY_MS;
-        const closed = processOhlcMessage(tracked, message);
-        if (closed && onClosedBar) {
-          try {
-            onClosedBar(closed);
-          } catch (err) {
-            console.error(
-              `KrakenOhlcSource(${config.symbol}) : erreur dans le callback onClosedBar`,
-              err,
-            );
-          }
+      // Le backoff de reconnexion n'est réinitialisé qu'ici, pas dans le
+      // handler `open` : un serveur qui accepte la connexion puis la ferme
+      // aussitôt (rate limiting, abonnement rejeté) ne doit pas repartir à
+      // 1s indéfiniment. Recevoir un message OHLC exploitable est la seule
+      // preuve que l'abonnement fonctionne réellement.
+      reconnectDelay = RECONNECT_BASE_DELAY_MS;
+
+      const messageType = (parsed as { type?: unknown }).type;
+      const closedBars = handleOhlcMessages(tracked, messageType, messages);
+      for (const closed of closedBars) {
+        if (!onClosedBar) continue;
+        try {
+          onClosedBar(closed);
+        } catch (err) {
+          console.error(
+            `KrakenOhlcSource(${config.symbol}) : erreur dans le callback onClosedBar`,
+            err,
+          );
         }
       }
     });
