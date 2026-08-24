@@ -11,7 +11,7 @@ mécanique tourne de bout en bout et est honnête sur les coûts de transaction.
 ```bash
 npm i -D typescript @types/node
 npm run typecheck
-npm test          # 61 tests
+npm test          # 65 tests
 ```
 
 Node 22.6+ requis (type-stripping natif, pas de build step).
