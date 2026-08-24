@@ -26,6 +26,7 @@ export interface BacktestOptions {
   readonly fees: FeeSchedule;
   readonly slippageBps: number;
   readonly maxConcurrentPositions: number;
+  /** Fraction du capital risquée par trade — 0.01 = 1 %. */
   readonly riskPerTradePct: number;
 }
 

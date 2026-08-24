@@ -90,15 +90,27 @@ test("Phase 3 — critère de sortie : le sizing par risque normalise l'expositi
     `attendu un notional plus grand sur LOWVOL (${lowVolNotional}) que sur HIGHVOL (${highVolNotional})`,
   );
 
-  // Aucun des deux trades ne dépasse jamais le plafond fraction fixe —
-  // l'invariant de la Phase 2 reste garanti même avec le sizing par risque.
+  // Aucun achat, sur aucune des deux paires, ne dépasse jamais le plafond
+  // fraction fixe — l'invariant de la Phase 2 reste garanti même avec le
+  // sizing par risque. Vérifié sur TOUS les achats du run, pas seulement
+  // le premier de chaque paire (la stratégie réentre à chaque nouveau
+  // croisement sur les 200 barres du fixture).
+  //
+  // Le plafond utilisé ici (initialCash / maxConcurrentPositions) est une
+  // approximation du vrai plafond de la Phase 2 (équité au moment de
+  // l'entrée / maxConcurrentPositions) — délibérément plus stricte sur ce
+  // fixture à équité quasi plate (cash initial 1000, équité finale
+  // ~1001.66), donc ne peut produire qu'un faux échec, jamais un faux
+  // succès. Si ce fixture évolue vers un scénario avec un drift d'équité
+  // significatif, recalculer le plafond par entrée plutôt que d'utiliser
+  // cette constante.
   const fixedFractionCap = 1000 / maxConcurrentPositions;
-  assert.ok(
-    lowVolNotional <= fixedFractionCap + 1e-6,
-    `LOWVOL (${lowVolNotional}) dépasse le plafond fraction fixe (${fixedFractionCap})`,
-  );
-  assert.ok(
-    highVolNotional <= fixedFractionCap + 1e-6,
-    `HIGHVOL (${highVolNotional}) dépasse le plafond fraction fixe (${fixedFractionCap})`,
-  );
+  for (const trade of result.portfolio.trades) {
+    if (trade.side !== 'buy') continue;
+    const notional = trade.quantity * trade.price;
+    assert.ok(
+      notional <= fixedFractionCap + 1e-6,
+      `${trade.symbol} (${notional}) dépasse le plafond fraction fixe (${fixedFractionCap})`,
+    );
+  }
 });

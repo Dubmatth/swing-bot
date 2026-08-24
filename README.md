@@ -86,8 +86,11 @@ Phase 2. Critère de sortie démontré par `test/phase3.test.ts` : le sizing
 par risque normalise l'exposition entre paires de volatilité différente,
 sans jamais dépasser le plafond fraction fixe.
 
-Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1 et
-Phase 2, section « Hors périmètre ») :
+Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1,
+Phase 2 et Phase 3, section « Hors périmètre ») :
+- Stop-loss réellement exécuté : `stopDistance` sert uniquement au calcul
+  de la taille de position, aucun ordre stop n'est simulé — une position
+  n'est encore fermée que par un `Intent` `'exit'` émis par la stratégie.
 - Slippage dépendant de la volatilité (ATR), plutôt que le bps fixe actuel
   (`src/backtest/execution.ts`).
 - Ordres limites / distinction maker vs taker à l'exécution.

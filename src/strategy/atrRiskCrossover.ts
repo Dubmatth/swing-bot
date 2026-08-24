@@ -11,6 +11,11 @@
  * runner.ts). C'est la motivation d'origine du commentaire de la classe Atr
  * dans indicators.ts : normaliser l'exposition entre une paire peu volatile
  * et une paire trois fois plus volatile.
+ *
+ * La fonction sma() et la logique de signal de decide() ci-dessous dupliquent
+ * donc délibérément celles de maCrossover.ts plutôt que de les factoriser :
+ * maCrossover.ts reste figé pour protéger les fixtures de tests numériques
+ * des Phases 1 et 2, déjà mergées, qui dépendent de son comportement exact.
  */
 
 import type { BarView, Intent, Strategy, StrategyContext } from './types.ts';

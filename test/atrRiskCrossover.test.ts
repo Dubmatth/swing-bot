@@ -92,7 +92,7 @@ test('decide : signal de sortie ne porte pas de stopDistance', () => {
   assert.ok(!('stopDistance' in intents[0]!));
 });
 
-test('decide : hold si fast > slow ma déjà en position', () => {
+test('decide : hold si fast > slow mais déjà en position', () => {
   const s = createAtrRiskCrossover({ symbol: SYMBOL, fast: 2, slow: 4, atrPeriod: 3, atrMultiplier: 2 });
   const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 10, entryTime: 0 };
   const ctx = ctxFor([10, 10, 10, 40], position);
