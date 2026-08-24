@@ -132,6 +132,15 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   période précise n'est pas possible sans tomber dans le biais de
   sélection rétroactive que `universe.ts` met explicitement en garde
   contre.
+- **Force relative / momentum cross-sectionnel** (classer les 20 paires
+  par performance récente, détenir seulement les meilleures) : famille de
+  signal explorée en spike (jetable, jamais formalisée en code de
+  production). Sans hystérésis, rendement négatif in-sample **et** hors
+  échantillon (pas un cas de sur-ajustement, juste l'absence d'edge). Avec
+  hystérésis (entrée top-3, sortie seulement après le top-10, pour réduire
+  le churn), quasi neutre hors échantillon (-0,28 %) mais avec un écart
+  in/hors-échantillon plus marqué que mean-reversion. Ni pire ni meilleur
+  que le candidat déjà trouvé — non retenue, non creusée davantage.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance) est un candidat **provisoire**, pas une stratégie
