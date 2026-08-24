@@ -54,6 +54,7 @@ test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de
     fees: DEFAULT_FEES,
     slippageBps: 5,
     maxConcurrentPositions: 1,
+    riskPerTradePct: 1,
   });
 
   assert.ok(
@@ -76,6 +77,7 @@ test("Phase 1 — critère de sortie : un croisement de moyennes mobiles perd de
     fees: { makerBps: 0, takerBps: 0 },
     slippageBps: 0,
     maxConcurrentPositions: 1,
+    riskPerTradePct: 1,
   });
   const finalEquityFrictionless =
     frictionless.portfolio.cash +

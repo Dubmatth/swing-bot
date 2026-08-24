@@ -17,7 +17,14 @@ export type BacktestEvent =
       /** Index de barre dans la grille commune (pas un timestamp). */
       readonly t: number;
     }
-  | { readonly kind: 'order-requested'; readonly symbol: string; readonly side: 'buy' | 'sell'; readonly reason: string }
+  | {
+      readonly kind: 'order-requested';
+      readonly symbol: string;
+      readonly side: 'buy' | 'sell';
+      readonly reason: string;
+      /** Distance de stop transmise depuis Intent.enter, pour le sizing par risque. Absent côté vente. */
+      readonly stopDistance?: number;
+    }
   | {
       readonly kind: 'order-filled';
       readonly symbol: string;

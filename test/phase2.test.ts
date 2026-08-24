@@ -59,6 +59,7 @@ test('Phase 2 — critère de sortie : le multi-paires ne dépasse jamais le cap
     fees: DEFAULT_FEES,
     slippageBps: 5,
     maxConcurrentPositions: 2,
+    riskPerTradePct: 1,
   });
 
   assert.ok(

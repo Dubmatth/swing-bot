@@ -106,7 +106,13 @@ export interface Position {
 }
 
 export type Intent =
-  | { readonly kind: 'enter'; readonly symbol: string; readonly reason: string }
+  | {
+      readonly kind: 'enter';
+      readonly symbol: string;
+      readonly reason: string;
+      /** Distance de stop en prix (pas en %), pour le sizing par risque du runner. Optionnel. */
+      readonly stopDistance?: number;
+    }
   | { readonly kind: 'exit'; readonly symbol: string; readonly reason: string }
   | { readonly kind: 'hold' };
 
