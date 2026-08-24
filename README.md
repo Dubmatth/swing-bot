@@ -73,7 +73,7 @@ src/strategy/types.ts     BarView, Strategy, Intent
 src/strategy/indicators.ts EMA, SMA, ATR, RollingStd — O(1) par barre
 src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
 src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMultiplier × ATR
-src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel
+src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
 src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
 src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
@@ -92,6 +92,7 @@ scripts/run-paper.ts Point d'entrée du runner de trading papier (npm run run-pa
 scripts/convert-trades.ts Convertit les CSV "Time & Sales" en bougies OHLCVT (voir « Données »)
 scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur les 20 paires réelles
 scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
+scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 ```
 
@@ -141,8 +142,7 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   period=80 → +0,71 % (13/37). Avec filtre : period=70 → +0,68 % (12/37) à
   `volumeMultiplier=1.2`, puis **dégradation** à +0,66 % (11/37) et
   +0,52 % (11/37) pour 1,5 et 2,0 ; period=80 → **strictement identique**
-  (+0,71 %, 13/37) aux trois multiplicateurs testés (1,2 / 1,5 / 2,0), signe
-  que le filtre ne bloque aucun trade sur cette zone de paramètres.
+  (+0,71 %, 13/37) aux trois multiplicateurs testés (1,2 / 1,5 / 2,0) : à 1,2 et 1,5 le filtre ne bloque aucun signal d'entrée ; à 2,0 il en bloque 3, mais exactement les 3 que le runner rejetait déjà faute de slot libre (`maxConcurrentPositions=5`) ou de capital — la séquence de trades exécutés (45) est inchangée. Ce non-effet dépend donc du régime d'allocation, pas seulement du signal : à revérifier si `maxConcurrentPositions`/`riskPerTradePct` changent.
   Aucun réglage ne dépasse clairement la référence — au mieux neutre, au
   pire dégradé. Le filtre de volume **n'apporte rien de plus** sur cette
   période : non retenu, le candidat sans filtre de volume reste la
