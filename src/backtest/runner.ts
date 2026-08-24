@@ -50,6 +50,46 @@ function marksAt(series: ReadonlyMap<string, BarSeries>, t: number): Map<string,
   return marks;
 }
 
+export interface SizeBuyOrderInput {
+  readonly cash: number;
+  readonly equity: number;
+  readonly maxConcurrentPositions: number;
+  readonly riskPerTradePct: number;
+  readonly referencePrice: number;
+  readonly stopDistance?: number;
+}
+
+export type SizeBuyOrderResult =
+  | { readonly ok: true; readonly budget: number }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Calcule le budget alloué à un achat : plafond fraction fixe
+ * (cash/N positions), resserré (jamais élargi) par un budget de risque si
+ * stopDistance est fourni. Partagé entre runBacktest et le runner papier
+ * (paperRunner.ts) pour qu'ils ne puissent jamais diverger sur le sizing.
+ */
+export function sizeBuyOrder(input: SizeBuyOrderInput): SizeBuyOrderResult {
+  if (
+    input.stopDistance !== undefined &&
+    (!Number.isFinite(input.stopDistance) || !(input.stopDistance > 0))
+  ) {
+    return { ok: false, reason: 'stopDistance invalide' };
+  }
+
+  let budget = Math.min(input.cash, input.equity / input.maxConcurrentPositions);
+  if (input.stopDistance !== undefined) {
+    const riskBudget =
+      ((input.equity * input.riskPerTradePct) / input.stopDistance) * input.referencePrice;
+    budget = Math.min(budget, riskBudget);
+  }
+
+  if (!(budget > 0)) {
+    return { ok: false, reason: 'budget alloué insuffisant' };
+  }
+  return { ok: true, budget };
+}
+
 export function runBacktest(
   series: ReadonlyMap<string, BarSeries>,
   strategy: Strategy,
@@ -168,32 +208,25 @@ export function runBacktest(
               });
               break;
             }
-            budget = Math.min(portfolio.cash, equitySnapshot / opts.maxConcurrentPositions);
-            if (event.stopDistance !== undefined) {
-              if (!Number.isFinite(event.stopDistance) || !(event.stopDistance > 0)) {
-                queue.push({
-                  kind: 'order-rejected',
-                  symbol: event.symbol,
-                  side: 'buy',
-                  reason: 'stopDistance invalide',
-                  time: fillTime,
-                });
-                break;
-              }
-              const riskBudget =
-                ((equitySnapshot * opts.riskPerTradePct) / event.stopDistance) * referencePrice;
-              budget = Math.min(budget, riskBudget);
-            }
-            if (!(budget > 0)) {
+            const sized = sizeBuyOrder({
+              cash: portfolio.cash,
+              equity: equitySnapshot,
+              maxConcurrentPositions: opts.maxConcurrentPositions,
+              riskPerTradePct: opts.riskPerTradePct,
+              referencePrice,
+              ...(event.stopDistance !== undefined ? { stopDistance: event.stopDistance } : {}),
+            });
+            if (!sized.ok) {
               queue.push({
                 kind: 'order-rejected',
                 symbol: event.symbol,
                 side: 'buy',
-                reason: 'budget alloué insuffisant',
+                reason: sized.reason,
                 time: fillTime,
               });
               break;
             }
+            budget = sized.budget;
           }
 
           if (targetSeries.synthetic[fillT] === 1) {

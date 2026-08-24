@@ -5,7 +5,7 @@ import { emptyColumns, freezeSeries } from '../src/data/series.ts';
 import type { BarSeries } from '../src/data/series.ts';
 import type { Intent, Strategy, StrategyContext } from '../src/strategy/types.ts';
 import { DEFAULT_FEES, simulateBuy, simulateSell } from '../src/backtest/execution.ts';
-import { runBacktest } from '../src/backtest/runner.ts';
+import { runBacktest, sizeBuyOrder } from '../src/backtest/runner.ts';
 
 const SYMBOL = 'TESTEUR';
 const STEP = 14_400;
@@ -399,4 +399,69 @@ test('runBacktest : le plafond fraction fixe gagne quand le budget par risque se
   const expectedFill = simulateBuy(1000, 110, { fees: DEFAULT_FEES, slippageBps: 10 });
   assert.ok(Math.abs((result.portfolio.trades[0]?.price ?? 0) - expectedFill.price) < 1e-9);
   assert.ok(Math.abs((result.portfolio.trades[0]?.quantity ?? 0) - expectedFill.quantity) < 1e-9);
+});
+
+test('sizeBuyOrder : budget = min(cash, équité/N) sans stopDistance', () => {
+  const result = sizeBuyOrder({
+    cash: 1000,
+    equity: 2000,
+    maxConcurrentPositions: 4,
+    riskPerTradePct: 0.01,
+    referencePrice: 100,
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && Math.abs(result.budget - 500) < 1e-9); // 2000/4 = 500 < cash=1000
+});
+
+test('sizeBuyOrder : le budget de risque resserre le plafond fraction fixe', () => {
+  const result = sizeBuyOrder({
+    cash: 1000,
+    equity: 1000,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.01,
+    referencePrice: 100,
+    stopDistance: 2, // riskBudget = (1000*0.01/2)*100 = 500 < plafond fraction fixe (1000)
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && Math.abs(result.budget - 500) < 1e-9);
+});
+
+test('sizeBuyOrder : le plafond fraction fixe gagne quand le budget de risque serait plus grand', () => {
+  const result = sizeBuyOrder({
+    cash: 1000,
+    equity: 1000,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.5,
+    referencePrice: 100,
+    stopDistance: 0.01, // riskBudget énorme
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && Math.abs(result.budget - 1000) < 1e-9);
+});
+
+test('sizeBuyOrder : stopDistance invalide est rejeté avec la raison exacte', () => {
+  const result = sizeBuyOrder({
+    cash: 1000, equity: 1000, maxConcurrentPositions: 1, riskPerTradePct: 0.01,
+    referencePrice: 100, stopDistance: -5,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && result.reason === 'stopDistance invalide');
+});
+
+test('sizeBuyOrder : stopDistance infini est rejeté', () => {
+  const result = sizeBuyOrder({
+    cash: 1000, equity: 1000, maxConcurrentPositions: 1, riskPerTradePct: 0.01,
+    referencePrice: 100, stopDistance: Infinity,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && result.reason === 'stopDistance invalide');
+});
+
+test('sizeBuyOrder : budget nul ou négatif est rejeté avec la raison exacte', () => {
+  const result = sizeBuyOrder({
+    cash: 0, equity: 0, maxConcurrentPositions: 1, riskPerTradePct: 0.01,
+    referencePrice: 100,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(!result.ok && result.reason === 'budget alloué insuffisant');
 });
