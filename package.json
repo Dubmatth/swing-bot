@@ -8,7 +8,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/**/*.test.ts"
+    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "convert-trades": "node --experimental-strip-types scripts/convert-trades.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
