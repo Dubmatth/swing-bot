@@ -1,0 +1,33 @@
+[Unit]
+Description=swing-bot — runner de trading papier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=swingbot
+Group=swingbot
+WorkingDirectory=/opt/swing-bot
+ExecStart=/usr/bin/node --experimental-strip-types scripts/run-paper.ts
+Restart=always
+RestartSec=5
+
+# Optionnel : fichier de secrets hors dépôt, pour le jour où des clés API
+# seront nécessaires (voir docs/superpowers/specs/2026-08-24-real-order-api-key-security-notes.md).
+# Le préfixe "-" rend ce fichier optionnel : rien n'est requis aujourd'hui,
+# le trading papier ne nécessite aucune clé.
+EnvironmentFile=-/etc/swing-bot/.env
+
+StandardOutput=journal
+StandardError=journal
+
+# Durcissement : le service ne peut écrire que dans data/, le reste du
+# système de fichiers lui est fermé.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/swing-bot/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
