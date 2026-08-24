@@ -1,0 +1,26 @@
+[Unit]
+Description=swing-bot — tableau de bord (localhost uniquement)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=swingbot
+Group=swingbot
+WorkingDirectory=/opt/swing-bot
+ExecStart=/usr/bin/node --experimental-strip-types scripts/dashboard.ts
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+# Durcissement — identique au service principal.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/swing-bot/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

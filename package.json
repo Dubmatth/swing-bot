@@ -11,7 +11,8 @@
     "test": "node --experimental-strip-types --test test/**/*.test.ts",
     "convert-trades": "node --experimental-strip-types scripts/convert-trades.ts",
     "run-paper": "node --experimental-strip-types scripts/run-paper.ts",
-    "status": "node --experimental-strip-types scripts/status.ts"
+    "status": "node --experimental-strip-types scripts/status.ts",
+    "dashboard": "node --experimental-strip-types scripts/dashboard.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

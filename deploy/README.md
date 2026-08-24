@@ -17,60 +17,89 @@ Noter l'adresse IP donnée à la création.
 
 ## 2. Pousser le code sur GitHub (si pas déjà fait)
 
-Le script d'installation clone le dépôt depuis GitHub. Vérifier que
-`master` est poussé :
-
 ```bash
 git push origin master
 ```
 
-Si le dépôt est privé, soit le rendre accessible en lecture au VPS (clé de
-déploiement GitHub), soit adapter `REPO_URL` dans `setup-vps.sh` pour
-utiliser une URL avec jeton d'accès, soit copier le code directement avec
-`scp -r . root@<IP>:/opt/swing-bot` à la place de l'étape `git clone`.
+## 3. Dépôt privé : clé de déploiement (lecture seule)
 
-## 3. Lancer l'installation
+Le dépôt `Dubmatth/swing-bot` est privé — le clone HTTPS anonyme échoue.
+Sur le VPS, en root :
 
 ```bash
-ssh root@<IP>
-curl -fsSL https://raw.githubusercontent.com/Dubmatth/swing-bot/master/deploy/setup-vps.sh -o setup-vps.sh
-bash setup-vps.sh
+ssh-keygen -t ed25519 -f /root/.ssh/github_deploy_key -N "" -C "swing-bot-vps-deploy-key"
+cat >> /root/.ssh/config <<EOF
+Host github.com
+  IdentityFile /root/.ssh/github_deploy_key
+  IdentitiesOnly yes
+EOF
+chmod 600 /root/.ssh/config
+ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts
 ```
 
-(Ou copier `setup-vps.sh` sur le serveur manuellement si le dépôt est
-privé, avant que `git clone` ne soit possible.)
+Ajouter la clé publique affichée (`cat /root/.ssh/github_deploy_key.pub`)
+sur https://github.com/Dubmatth/swing-bot/settings/keys → **Add deploy
+key** → **ne pas** cocher « Allow write access » (lecture seule).
+
+Puis cloner via SSH plutôt que `REPO_URL` (HTTPS) :
+
+```bash
+git clone git@github.com:Dubmatth/swing-bot.git /opt/swing-bot
+```
+
+## 4. Lancer l'installation
+
+```bash
+bash /opt/swing-bot/deploy/setup-vps.sh
+```
 
 Le script installe Node 22, crée un utilisateur dédié `swingbot` sans
-privilège, clone le dépôt, configure le pare-feu local et les mises à jour
-automatiques, puis démarre le service `systemd`.
+privilège, met à jour le dépôt déjà cloné (`git pull`, fonctionne
+maintenant via la clé de déploiement), configure le pare-feu local et les
+mises à jour automatiques, puis démarre les services `systemd` (runner +
+tableau de bord).
 
-## 4. Vérifier que ça tourne
+## 5. Vérifier que ça tourne
 
 ```bash
-systemctl status swing-bot       # état du service
-journalctl -u swing-bot -f       # logs en direct
+systemctl status swing-bot swing-bot-dashboard   # état des services
+journalctl -u swing-bot -f                       # logs en direct
 ```
 
-## 5. Consulter le statut du portefeuille à distance
+## 6. Consulter le statut du portefeuille à distance (terminal)
 
 ```bash
 ssh root@<IP> "cd /opt/swing-bot && sudo -u swingbot npm run status"
 ```
 
-## 6. Mettre à jour le code après un nouveau commit
+## 7. Tableau de bord visuel (navigateur, via tunnel SSH)
+
+Le tableau de bord (`scripts/dashboard.ts`) n'écoute que sur
+`127.0.0.1:8080` du serveur — jamais exposé publiquement, par choix
+délibéré (voir la conversation de conception). Pour le consulter, ouvrir
+un tunnel SSH depuis le Mac :
+
+```bash
+ssh -N -L 8080:localhost:8080 root@<IP>
+```
+
+Puis ouvrir **http://localhost:8080** dans un navigateur, tant que le
+tunnel reste ouvert (`Ctrl+C` dans le terminal du tunnel pour le fermer).
+
+## 8. Mettre à jour le code après un nouveau commit
 
 ```bash
 ssh root@<IP>
 cd /opt/swing-bot
 git pull
-systemctl restart swing-bot
+systemctl restart swing-bot swing-bot-dashboard
 ```
 
-## 7. Arrêter / redémarrer le service
+## 9. Arrêter / redémarrer les services
 
 ```bash
-systemctl stop swing-bot
-systemctl restart swing-bot
+systemctl stop swing-bot swing-bot-dashboard
+systemctl restart swing-bot swing-bot-dashboard
 ```
 
 ## Hors périmètre pour l'instant

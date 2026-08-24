@@ -46,10 +46,13 @@ ufw --force enable
 echo "==> Mises à jour de sécurité automatiques"
 dpkg-reconfigure -f noninteractive unattended-upgrades
 
-echo "==> Service systemd"
+echo "==> Services systemd (runner + tableau de bord)"
 cp "$APP_DIR/deploy/swing-bot.service" /etc/systemd/system/swing-bot.service
+cp "$APP_DIR/deploy/swing-bot-dashboard.service" /etc/systemd/system/swing-bot-dashboard.service
 systemctl daemon-reload
 systemctl enable --now swing-bot
+systemctl enable --now swing-bot-dashboard
 
-echo "==> Terminé. Vérifier l'état avec : systemctl status swing-bot"
+echo "==> Terminé. Vérifier l'état avec : systemctl status swing-bot swing-bot-dashboard"
 echo "    Suivre les logs avec       : journalctl -u swing-bot -f"
+echo "    Tableau de bord (localhost uniquement, voir deploy/README.md pour le tunnel SSH)"
