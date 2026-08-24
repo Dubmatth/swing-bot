@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { processOhlcMessage } from '../src/live/krakenOhlcSource.ts';
+import { isValidOhlcEntry, processOhlcMessage } from '../src/live/krakenOhlcSource.ts';
 import type { OhlcMessage } from '../src/live/krakenOhlcSource.ts';
 
 function msg(intervalBegin: number, close: number, symbol = 'XBTEUR'): OhlcMessage {
@@ -48,4 +48,34 @@ test('processOhlcMessage : chaque symbole a son propre état, indépendant des a
   assert.ok(resultXbt);
   assert.equal(resultXbt?.symbol, 'XBTEUR');
   assert.equal(resultEth, null);
+});
+
+test('isValidOhlcEntry : accepte une entrée OHLC cohérente', () => {
+  assert.equal(isValidOhlcEntry(1000, 100, 110, 90, 105), true);
+});
+
+test('isValidOhlcEntry : rejette un interval_begin NaN (date invalide côté réseau)', () => {
+  // Reproduit le cas d'un interval_begin syntaxiquement une string mais
+  // représentant une date invalide : new Date(...).getTime() vaut NaN, ce qui
+  // sans ce garde-fou déjoue silencieusement les comparaisons de
+  // processOhlcMessage (NaN === x et NaN < x sont toutes deux fausses).
+  assert.equal(isValidOhlcEntry(Number.NaN, 100, 110, 90, 105), false);
+});
+
+test('isValidOhlcEntry : rejette un interval_begin nul ou négatif', () => {
+  assert.equal(isValidOhlcEntry(0, 100, 110, 90, 105), false);
+  assert.equal(isValidOhlcEntry(-1, 100, 110, 90, 105), false);
+});
+
+test('isValidOhlcEntry : rejette un OHLC incohérent (high < low)', () => {
+  assert.equal(isValidOhlcEntry(1000, 100, 90, 110, 105), false);
+});
+
+test('isValidOhlcEntry : rejette un OHLC incohérent (open hors de [low, high])', () => {
+  assert.equal(isValidOhlcEntry(1000, 200, 110, 90, 105), false);
+});
+
+test('isValidOhlcEntry : rejette un prix nul ou négatif', () => {
+  assert.equal(isValidOhlcEntry(1000, 0, 110, 0, 105), false);
+  assert.equal(isValidOhlcEntry(1000, -1, 110, -1, 105), false);
 });

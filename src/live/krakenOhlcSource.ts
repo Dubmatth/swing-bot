@@ -1,7 +1,8 @@
 /**
  * Client WebSocket Kraken (canal OHLC, WS v2). La logique de détection de
- * clôture de bougie (processOhlcMessage) est une fonction pure, testée
- * exhaustivement sans réseau. Le câblage autour (connexion, abonnement,
+ * clôture de bougie (processOhlcMessage) et de validation des trames
+ * (isValidOhlcEntry) sont des fonctions pures, testées exhaustivement sans
+ * réseau. Le câblage autour (connexion, abonnement,
  * parsing JSON, reconnexion) n'est PAS testé par npm test — vérifié
  * manuellement en le faisant tourner, seule pièce du projet dans ce cas.
  *
@@ -104,6 +105,29 @@ function parseIntervalBeginToEpochSeconds(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
+/**
+ * Valide une entrée OHLC brute reçue du réseau, une fois les types primitifs
+ * déjà vérifiés — fonction pure, testable sans réseau. `intervalBegin` doit
+ * être une date valide déjà convertie en secondes epoch (un interval_begin
+ * syntaxiquement une string mais représentant une date invalide donne NaN
+ * via parseIntervalBeginToEpochSeconds, ce qui déjoue silencieusement les
+ * comparaisons de processOhlcMessage — voir revue de branche). Les garde-fous
+ * de cohérence OHLC reprennent le style de src/data/krakenCsv.ts, adaptés au
+ * contexte réseau : une trame invalide est ignorée, jamais levée.
+ */
+export function isValidOhlcEntry(
+  intervalBegin: number,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+): boolean {
+  if (!Number.isFinite(intervalBegin) || intervalBegin <= 0) return false;
+  if (high < low || open > high || open < low || close > high || close < low) return false;
+  if (open <= 0 || low <= 0) return false;
+  return true;
+}
+
 export function createKrakenOhlcSource(config: KrakenOhlcSourceConfig): LiveBarSource {
   const tracked = new Map<string, TrackedBar>();
   let ws: WebSocket | undefined;
@@ -118,7 +142,6 @@ export function createKrakenOhlcSource(config: KrakenOhlcSourceConfig): LiveBarS
     ws = socket;
 
     socket.addEventListener('open', () => {
-      reconnectDelay = RECONNECT_BASE_DELAY_MS;
       socket.send(
         JSON.stringify({
           method: 'subscribe',
@@ -164,9 +187,18 @@ export function createKrakenOhlcSource(config: KrakenOhlcSourceConfig): LiveBarS
         ) {
           continue;
         }
+
+        const intervalBegin = parseIntervalBeginToEpochSeconds(e.interval_begin);
+        if (!isValidOhlcEntry(intervalBegin, e.open, e.high, e.low, e.close)) {
+          console.error(
+            `KrakenOhlcSource(${config.symbol}) : trame OHLC invalide, ignorée`,
+          );
+          continue;
+        }
+
         const message: OhlcMessage = {
           symbol: config.symbol,
-          intervalBegin: parseIntervalBeginToEpochSeconds(e.interval_begin),
+          intervalBegin,
           open: e.open,
           high: e.high,
           low: e.low,
@@ -174,9 +206,22 @@ export function createKrakenOhlcSource(config: KrakenOhlcSourceConfig): LiveBarS
           volume: e.volume,
           trades: e.trades,
         };
+        // Le backoff de reconnexion n'est réinitialisé qu'ici, pas dans le
+        // handler `open` : un serveur qui accepte la connexion puis la ferme
+        // aussitôt (rate limiting, abonnement rejeté) ne doit pas repartir à
+        // 1s indéfiniment. Recevoir un message OHLC exploitable est la seule
+        // preuve que l'abonnement fonctionne réellement.
+        reconnectDelay = RECONNECT_BASE_DELAY_MS;
         const closed = processOhlcMessage(tracked, message);
         if (closed && onClosedBar) {
-          onClosedBar(closed);
+          try {
+            onClosedBar(closed);
+          } catch (err) {
+            console.error(
+              `KrakenOhlcSource(${config.symbol}) : erreur dans le callback onClosedBar`,
+              err,
+            );
+          }
         }
       }
     });
