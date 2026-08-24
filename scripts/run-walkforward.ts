@@ -15,6 +15,7 @@ import { loadUniverse } from '../src/data/krakenCsv.ts';
 import { UNIVERSE_SYMBOLS } from '../src/config/universe.ts';
 import { createAtrRiskCrossover } from '../src/strategy/atrRiskCrossover.ts';
 import { createMaCrossover } from '../src/strategy/maCrossover.ts';
+import { createMeanReversion } from '../src/strategy/meanReversion.ts';
 import { combineStrategies } from '../src/strategy/combineStrategies.ts';
 import type { Strategy } from '../src/strategy/types.ts';
 import { runWalkForward } from '../src/backtest/walkForward.ts';
@@ -39,6 +40,11 @@ interface MaParams {
   readonly slow: number;
 }
 
+interface MeanReversionParams {
+  readonly period: number;
+  readonly entryK: number;
+}
+
 function cartesian<T>(...arrays: readonly T[][]): T[][] {
   return arrays.reduce<T[][]>(
     (acc, arr) => acc.flatMap((combo) => arr.map((x) => [...combo, x])),
@@ -55,7 +61,12 @@ const maGrid: MaParams[] = cartesian([10, 20, 30], [50, 100, 150]).map(([fast, s
   slow: slow!,
 }));
 
-const CANDIDATES: readonly Candidate<AtrParams | MaParams>[] = [
+const meanReversionGrid: MeanReversionParams[] = cartesian(
+  [10, 20, 30, 50],
+  [1, 1.5, 2, 2.5, 3],
+).map(([period, entryK]) => ({ period: period!, entryK: entryK! }));
+
+const CANDIDATES: readonly Candidate<AtrParams | MaParams | MeanReversionParams>[] = [
   {
     name: 'atr-risk-crossover (grille élargie)',
     paramGrid: atrGrid,
@@ -72,6 +83,16 @@ const CANDIDATES: readonly Candidate<AtrParams | MaParams>[] = [
     strategyFactory: (p) =>
       combineStrategies(
         UNIVERSE_SYMBOLS.map((symbol) => createMaCrossover({ symbol, ...(p as MaParams) })),
+      ),
+  },
+  {
+    name: 'mean-reversion (bandes de Bollinger)',
+    paramGrid: meanReversionGrid,
+    strategyFactory: (p) =>
+      combineStrategies(
+        UNIVERSE_SYMBOLS.map((symbol) =>
+          createMeanReversion({ symbol, ...(p as MeanReversionParams) }),
+        ),
       ),
   },
 ];
