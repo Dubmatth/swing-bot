@@ -132,6 +132,21 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   période précise n'est pas possible sans tomber dans le biais de
   sélection rétroactive que `universe.ts` met explicitement en garde
   contre.
+- **Filtre de volume** (n'acheter un creux que si le volume de la bougie
+  dépasse sa moyenne récente × un multiplicateur — `volumePeriod`/
+  `volumeMultiplier` sur `mean-reversion`) : testé par walk-forward avec
+  **0 degré de liberté** (grille fixe de 6 réglages, aucune sélection),
+  `volumePeriod=20` contre les deux références `period=70/80, entryK=4`.
+  Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec filtre : period=70 → +0,68 % (12/37) à
+  `volumeMultiplier=1.2`, puis **dégradation** à +0,66 % (11/37) et
+  +0,52 % (11/37) pour 1,5 et 2,0 ; period=80 → **strictement identique**
+  (+0,71 %, 13/37) aux trois multiplicateurs testés (1,2 / 1,5 / 2,0), signe
+  que le filtre ne bloque aucun trade sur cette zone de paramètres.
+  Aucun réglage ne dépasse clairement la référence — au mieux neutre, au
+  pire dégradé. Le filtre de volume **n'apporte rien de plus** sur cette
+  période : non retenu, le candidat sans filtre de volume reste la
+  référence.
 - **Force relative / momentum cross-sectionnel** (classer les 20 paires
   par performance récente, détenir seulement les meilleures) : famille de
   signal explorée en spike (jetable, jamais formalisée en code de
