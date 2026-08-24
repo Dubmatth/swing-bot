@@ -5,8 +5,9 @@
  * répertoire temporaire, pas laissée non testée par excès de prudence.
  */
 
-import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Portfolio, Trade } from '../backtest/portfolio.ts';
 import type { Position } from '../strategy/types.ts';
 
@@ -33,9 +34,25 @@ export function deserializePortfolio(data: PersistedPortfolio): Portfolio {
   return { cash: data.cash, positions, trades: [] };
 }
 
+/**
+ * Écriture atomique : écrit d'abord dans un fichier temporaire, puis
+ * renomme ce fichier vers `path`. Un renommage sur le même système de
+ * fichiers est atomique, donc `path` contient toujours soit l'ancien
+ * contenu complet, soit le nouveau, jamais un état tronqué — même si le
+ * processus est interrompu pendant l'écriture. `combineStrategies` peut
+ * déclencher deux fills (donc deux appels à onFill) dans le même tour
+ * synchrone : sans cette précaution, deux écritures qui se chevauchent
+ * vers le même chemin pourraient corrompre le snapshot. Le fichier
+ * temporaire porte un suffixe unique par appel (randomUUID) : deux
+ * écritures concurrentes vers le même `path` ne partagent jamais le même
+ * fichier temporaire, donc ne peuvent pas non plus se marcher dessus avant
+ * leur renommage respectif.
+ */
 export async function savePortfolioSnapshot(path: string, p: Portfolio): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(serializePortfolio(p), null, 2), 'utf8');
+  const tmpPath = `${path}.${randomUUID()}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(serializePortfolio(p), null, 2), 'utf8');
+  await rename(tmpPath, path);
 }
 
 export async function loadPortfolioSnapshot(path: string): Promise<Portfolio | undefined> {

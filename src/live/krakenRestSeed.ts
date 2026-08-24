@@ -48,6 +48,10 @@ export function parseRestOhlcResponse(
 
 /** Câblage réseau — non testé automatiquement, comme krakenOhlcSource.ts. */
 export async function fetchSeedBars(config: KrakenRestSeedConfig): Promise<readonly ClosedBar[]> {
+  if (!(config.count > 0)) {
+    throw new Error(`${config.symbol} : count invalide pour l'amorçage REST (${config.count})`);
+  }
+
   const url = new URL(config.restUrl ?? 'https://api.kraken.com/0/public/OHLC');
   url.searchParams.set('pair', config.restSymbol);
   url.searchParams.set('interval', String(config.interval));
@@ -68,6 +72,17 @@ export async function fetchSeedBars(config: KrakenRestSeedConfig): Promise<reado
   if (!Array.isArray(rows)) {
     throw new Error(`${config.symbol} : bougies OHLC de forme inattendue`);
   }
+  // Kraken renvoie toujours la bougie en cours de formation comme dernière
+  // ligne, en plus des bougies déjà closes. `result.last` est le timestamp
+  // epoch de la dernière bougie effectivement close : sans ce filtre, on
+  // amorcerait avec une bougie non close, que le WebSocket re-livrerait plus
+  // tard à sa vraie clôture — freezeSeries rejetterait alors ce timestamp
+  // dupliqué (voir liveSeriesBuilder.ts), figeant silencieusement la paire.
+  const last = Number(body.result['last']);
+  if (!Number.isFinite(last)) {
+    throw new Error(`${config.symbol} : champ 'last' absent ou invalide dans la réponse OHLC`);
+  }
   const bars = parseRestOhlcResponse(config.symbol, rows);
-  return bars.slice(-config.count);
+  const closedBars = bars.filter((b) => b.time <= last);
+  return closedBars.slice(-config.count);
 }

@@ -265,6 +265,41 @@ test('paperRunner : garde-fou du runner — ignore un enter si sizeBuyOrder refu
   assert.equal(portfolio.positions.size, 0);
 });
 
+test('paperRunner : une exception dans decide() (ex. historique insuffisant via BarView) ne sort pas de onClosedBar', () => {
+  // view.close(999) dépasse largement l'historique disponible : BarView lève
+  // RangeError("Historique insuffisant..."). Ce test prouve que le runner
+  // avale cette exception (log console.error) plutôt que de la laisser
+  // remonter jusqu'à l'appelant de emit() — correctif Important, revue
+  // finale de branche (garde de warmup manquante).
+  const throwingStrategy: Strategy = {
+    name: 'throws-on-decide',
+    warmup: 0,
+    params: {},
+    decide(ctx: StrategyContext): readonly Intent[] {
+      const view = ctx.views.get(SYMBOL_A);
+      view?.close(999); // lève RangeError : historique insuffisant
+      return [{ kind: 'hold' }];
+    },
+  };
+  const sourceA = createSyntheticSource();
+  const builderA = createLiveSeriesBuilder(SYMBOL_A, 240);
+  const portfolio = createPortfolio(1000);
+  const fills: Trade[] = [];
+  const runner = createPaperRunner({
+    strategy: throwingStrategy,
+    sources: new Map([[SYMBOL_A, sourceA]]),
+    builders: new Map([[SYMBOL_A, builderA]]),
+    portfolio,
+    options: { maxConcurrentPositions: 1, riskPerTradePct: 0.01, fees: DEFAULT_FEES, slippageBps: 5 },
+    onFill: (trade) => fills.push(trade),
+  });
+  runner.start();
+
+  assert.doesNotThrow(() => sourceA.emit(bar(SYMBOL_A, 0, 60)));
+  assert.equal(fills.length, 0);
+  assert.equal(portfolio.positions.size, 0);
+});
+
 test('paperRunner : reconstruit la vue de toutes les paires connues à chaque bougie, pas seulement celle qui vient de clôturer (stratégie croisée)', () => {
   const threshold = 50;
   // Stratégie qui dépend explicitement de DEUX symboles : elle n'entre sur A que si le

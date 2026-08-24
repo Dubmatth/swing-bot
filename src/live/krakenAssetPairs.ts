@@ -15,6 +15,14 @@
  * entrée sans wsname exploitable comme non exploitable (ignorée), ce qui
  * fait ensuite échouer explicitement sur le symbole manquant plus bas —
  * aucune adaptation du plan initial n'a été nécessaire.
+ *
+ * Correction (revue finale de branche, vérifiée contre l'API réelle) : le
+ * `wsname` renvoyé par /0/public/AssetPairs est en réalité au format
+ * WebSocket **v1** de Kraken, pas v2 — WS v2 rejette 'XBT/EUR' et 'XDG/EUR'
+ * ("Currency pair not supported") mais accepte 'BTC/EUR' et 'DOGE/EUR'. La
+ * table LEGACY_BASE_TO_WS_V2 ci-dessous traduit les codes d'actifs legacy
+ * connus vers leur équivalent WS v2, appliquée uniquement à la partie base
+ * (avant le '/') du wsname — la partie quote (ex. 'EUR') est inchangée.
  */
 
 import type { PairSpec } from '../config/universe.ts';
@@ -23,6 +31,25 @@ export interface KrakenPairMapping {
   readonly symbol: string;
   readonly wsSymbol: string;
   readonly restSymbol: string;
+}
+
+/**
+ * Codes d'actifs legacy (format wsname renvoyé par AssetPairs, en réalité WS
+ * v1) vers leur équivalent WS v2. Liste non exhaustive : seuls les codes
+ * legacy connus de l'univers actuel sont couverts ; un code absent de cette
+ * table est conservé tel quel (pas de traduction nécessaire pour la grande
+ * majorité des paires).
+ */
+const LEGACY_BASE_TO_WS_V2: Readonly<Record<string, string>> = {
+  XBT: 'BTC',
+  XDG: 'DOGE',
+};
+
+/** Traduit la partie base d'un wsname v1 ('BASE/QUOTE') vers son équivalent WS v2. */
+function toWsV2Symbol(wsnameV1: string): string {
+  const [base, quote] = wsnameV1.split('/');
+  const translatedBase = LEGACY_BASE_TO_WS_V2[base] ?? base;
+  return `${translatedBase}/${quote}`;
 }
 
 interface AssetPairEntry {
@@ -55,7 +82,7 @@ export function parseAssetPairsResponse(
     if (!found.wsname.includes('/')) {
       throw new Error(`${pair.symbol} : wsname inattendu '${found.wsname}'`);
     }
-    return { symbol: pair.symbol, wsSymbol: found.wsname, restSymbol: found.key };
+    return { symbol: pair.symbol, wsSymbol: toWsV2Symbol(found.wsname), restSymbol: found.key };
   });
 }
 

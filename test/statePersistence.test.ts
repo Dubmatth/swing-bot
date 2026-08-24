@@ -47,6 +47,31 @@ test('savePortfolioSnapshot/loadPortfolioSnapshot : aller-retour sur disque rée
   });
 });
 
+test('savePortfolioSnapshot : deux écritures successives ne corrompent jamais le fichier final (écriture atomique via fichier temporaire + rename)', async () => {
+  await withTempDir(async (dir) => {
+    const path = join(dir, 'portfolio.json');
+
+    const p1 = createPortfolio(1000);
+    applyBuyFill(p1, 'XBTEUR', { price: 100, quantity: 1, fee: 1 }, 1000);
+    await savePortfolioSnapshot(path, p1);
+
+    const p2 = createPortfolio(1000);
+    applyBuyFill(p2, 'XBTEUR', { price: 100, quantity: 1, fee: 1 }, 1000);
+    applyBuyFill(p2, 'ETHEUR', { price: 50, quantity: 3, fee: 0.3 }, 2000);
+    await savePortfolioSnapshot(path, p2);
+
+    // Après les deux sauvegardes, le fichier chargé est un JSON valide
+    // correspondant au DERNIER état sauvegardé — jamais un mélange tronqué
+    // des deux écritures, aucun fichier .tmp résiduel ne doit non plus
+    // apparaître à la place du fichier final.
+    const loaded = await loadPortfolioSnapshot(path);
+    assert.ok(loaded);
+    assert.equal(loaded.cash, p2.cash);
+    assert.deepEqual(loaded.positions.get('XBTEUR'), p2.positions.get('XBTEUR'));
+    assert.deepEqual(loaded.positions.get('ETHEUR'), p2.positions.get('ETHEUR'));
+  });
+});
+
 test('loadPortfolioSnapshot : renvoie undefined si le fichier n\'existe pas', async () => {
   await withTempDir(async (dir) => {
     const loaded = await loadPortfolioSnapshot(join(dir, 'absent.json'));

@@ -47,18 +47,33 @@ export interface PaperRunner {
   stop(): void;
 }
 
-function currentSeriesOrUndefined(builder: LiveSeriesBuilder): BarSeries | undefined {
+function currentSeriesOrUndefined(
+  builder: LiveSeriesBuilder,
+  symbol: string,
+  reportedUnavailable: Set<string>,
+): BarSeries | undefined {
   try {
     return builder.current();
-  } catch {
+  } catch (err) {
+    // Signalé une seule fois par symbole — sans ça, un symbole durablement
+    // indisponible (délisté, ou empoisonné par un bug d'amorçage) spammerait
+    // les logs à chaque bougie reçue pour toute autre paire (correctif
+    // Minor, revue finale de branche).
+    if (!reportedUnavailable.has(symbol)) {
+      reportedUnavailable.add(symbol);
+      console.error(`paperRunner : série indisponible pour ${symbol}`, err);
+    }
     return undefined;
   }
 }
 
-function marksFrom(builders: ReadonlyMap<string, LiveSeriesBuilder>): Map<string, number> {
+function marksFrom(
+  builders: ReadonlyMap<string, LiveSeriesBuilder>,
+  reportedUnavailable: Set<string>,
+): Map<string, number> {
   const marks = new Map<string, number>();
   for (const [symbol, builder] of builders) {
-    const series = currentSeriesOrUndefined(builder);
+    const series = currentSeriesOrUndefined(builder, symbol, reportedUnavailable);
     if (series !== undefined) {
       marks.set(symbol, series.close[series.length - 1]!);
     }
@@ -68,12 +83,15 @@ function marksFrom(builders: ReadonlyMap<string, LiveSeriesBuilder>): Map<string
 
 export function createPaperRunner(config: PaperRunnerConfig): PaperRunner {
   const { strategy, sources, builders, portfolio, options } = config;
+  const reportedUnavailable = new Set<string>();
 
   function applyIntent(intent: Intent, now: number): void {
     if (intent.kind === 'hold') return;
 
     const targetBuilder = builders.get(intent.symbol);
-    const targetSeries = targetBuilder ? currentSeriesOrUndefined(targetBuilder) : undefined;
+    const targetSeries = targetBuilder
+      ? currentSeriesOrUndefined(targetBuilder, intent.symbol, reportedUnavailable)
+      : undefined;
     if (targetSeries === undefined) return;
     const referencePrice = targetSeries.close[targetSeries.length - 1]!;
     const execOpts = { fees: options.fees, slippageBps: options.slippageBps };
@@ -82,7 +100,7 @@ export function createPaperRunner(config: PaperRunnerConfig): PaperRunner {
       if (portfolio.positions.size >= options.maxConcurrentPositions) return;
       if (portfolio.positions.has(intent.symbol)) return;
 
-      const equity = portfolioEquity(portfolio, marksFrom(builders));
+      const equity = portfolioEquity(portfolio, marksFrom(builders, reportedUnavailable));
       const sized = sizeBuyOrder({
         cash: portfolio.cash,
         equity,
@@ -112,18 +130,28 @@ export function createPaperRunner(config: PaperRunnerConfig): PaperRunner {
     if (!builder) return;
     builder.append(bar);
 
-    const views = new Map<string, BarView>();
-    for (const [sym, b] of builders) {
-      const series = currentSeriesOrUndefined(b);
-      if (series !== undefined) {
-        views.set(sym, new BarView(series, series.length - 1));
+    // Ne jamais laisser une exception sortir du callback d'une source live :
+    // ni portfolioEquity() (prix de marque manquant, ex. paire empoisonnée
+    // par un builder cassé) ni decide() (garde de warmup insuffisante côté
+    // stratégie, via BarView) ne doivent faire planter silencieusement le
+    // runner pour toutes les autres paires (correctif Important, revue
+    // finale de branche).
+    try {
+      const views = new Map<string, BarView>();
+      for (const [sym, b] of builders) {
+        const series = currentSeriesOrUndefined(b, sym, reportedUnavailable);
+        if (series !== undefined) {
+          views.set(sym, new BarView(series, series.length - 1));
+        }
       }
-    }
-    if (views.size === 0) return;
+      if (views.size === 0) return;
 
-    const ctx: StrategyContext = { views, positions: portfolio.positions, now: bar.time };
-    for (const intent of strategy.decide(ctx)) {
-      applyIntent(intent, bar.time);
+      const ctx: StrategyContext = { views, positions: portfolio.positions, now: bar.time };
+      for (const intent of strategy.decide(ctx)) {
+        applyIntent(intent, bar.time);
+      }
+    } catch (err) {
+      console.error(`paperRunner : erreur dans onClosedBar pour ${symbol}`, err);
     }
   }
 

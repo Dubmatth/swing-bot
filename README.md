@@ -1,19 +1,20 @@
-# swing-bot — Phase 5a
+# swing-bot — Phase 5b
 
 Bot de trading swing sur Kraken. La couche de données (Phase 0), le moteur de
 backtest event-driven avec frais/slippage (Phase 1), le backtest
 multi-paires avec allocation de capital (Phase 2), le sizing par risque ATR
-(Phase 3), la validation walk-forward (Phase 4) et le pipeline de données
-live (Phase 5a) sont en place. Une première recherche de stratégie sur
-données réelles (voir « Recherche de stratégie » ci-dessous) a produit un
-candidat provisoire, pas encore une stratégie validée pour du capital réel.
+(Phase 3), la validation walk-forward (Phase 4), le pipeline de données live
+(Phase 5a) et le runner de trading papier (Phase 5b) sont en place. Une
+première recherche de stratégie sur données réelles (voir « Recherche de
+stratégie » ci-dessous) a produit un candidat provisoire, pas encore une
+stratégie validée pour du capital réel.
 
 ## Démarrage
 
 ```bash
 npm i -D typescript @types/node
 npm run typecheck
-npm test          # 137 tests
+npm test          # 171 tests
 ```
 
 Node 22.6+ requis (type-stripping natif, pas de build step).
@@ -83,6 +84,11 @@ src/backtest/walkForward.ts Validation walk-forward : recherche de grille sur fe
 src/live/liveBarSource.ts Interface LiveBarSource + ClosedBar (injectable, testable sans réseau)
 src/live/liveSeriesBuilder.ts Construit une BarSeries croissante à partir de barres closes reçues au fil de l'eau
 src/live/krakenOhlcSource.ts Client WebSocket Kraken (canal OHLC v2) : détection de clôture pure + câblage réseau
+src/live/krakenAssetPairs.ts Résout wsname/altname contre /0/public/AssetPairs, traduit le wsname (WS v1) en symbole WS v2
+src/live/krakenRestSeed.ts Amorce liveSeriesBuilder via /0/public/OHLC (bougies déjà closes uniquement, filtrées sur result.last)
+src/live/statePersistence.ts Persistance du portefeuille (snapshot JSON, écriture atomique) et journal de trades JSONL append-only
+src/live/paperRunner.ts Boucle de décision réactive du runner papier : fill immédiat au prix de la bougie qui vient de clôturer
+scripts/run-paper.ts Point d'entrée du runner de trading papier (npm run run-paper)
 scripts/convert-trades.ts Convertit les CSV "Time & Sales" en bougies OHLCVT (voir « Données »)
 scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur les 20 paires réelles
 scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
@@ -175,18 +181,36 @@ série couvertes par des tests déterministes exhaustifs, sans jamais tester
 décision/exécution/portefeuille — mono-pair, pas de rattrapage de coupure,
 pas de persistance : voir Phase 5b.
 
+Phase 5b est terminée : runner de trading papier (`src/live/paperRunner.ts`),
+amorçage REST (`krakenRestSeed.ts`) et résolution des mappings de paires
+(`krakenAssetPairs.ts`, avec traduction du `wsname` WS v1 vers WS v2), et
+persistance par snapshot JSON + journal JSONL (`statePersistence.ts`). Le
+runner réutilise `sizeBuyOrder` (`src/backtest/runner.ts`) comme unique
+source de vérité pour le sizing — jamais dupliqué, pour que le
+sizing/fills papier ne puissent pas diverger de ceux déjà validés par
+walk-forward — avec des fills immédiats au prix de la bougie qui vient de
+clôturer, plutôt qu'à la bougie suivante comme en backtest (la contrainte
+anti-look-ahead n'a pas de sens sur un flux déjà temps réel). Critère de
+sortie démontré par `test/paperRunnerRestart.test.ts` : le portefeuille
+persisté est repris correctement après un redémarrage simulé (nouveau
+runner, nouvelles sources, portefeuille restauré depuis le disque).
+
 Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1,
-Phase 2, Phase 3, Phase 4 et Phase 5a, section « Hors périmètre ») :
+Phase 2, Phase 3, Phase 4, Phase 5a et Phase 5b, section « Hors périmètre ») :
 - Stop-loss réellement exécuté : `stopDistance` sert uniquement au calcul
   de la taille de position, aucun ordre stop n'est simulé — une position
   n'est encore fermée que par un `Intent` `'exit'` émis par la stratégie.
 - Slippage dépendant de la volatilité (ATR), plutôt que le bps fixe actuel
   (`src/backtest/execution.ts`).
 - Ordres limites / distinction maker vs taker à l'exécution.
-- Live-runner de trading papier (boucle de décision consommant le pipeline
-  live, persistance du portefeuille) : Phase 5b, pas encore construite.
-- Rattrapage des barres manquées pendant une coupure WebSocket, multi-paires
-  et persistance de la série côté live : voir la spec Phase 5a.
+- Envoi d'ordres réels à Kraken : la Phase 5b reste strictement du trading
+  papier, aucun chemin vers un ordre réel n'existe dans `paperRunner.ts`.
+- Rattrapage des barres manquées pendant une coupure WebSocket au-delà de
+  l'amorçage REST au démarrage : une coupure prolongée en cours de
+  fonctionnement laisse un trou dans la série, non comblé automatiquement.
+- Monitoring / alerting du runner en production (santé du process, retard
+  de fills, échecs de persistance récurrents) : seuls des `console.error`
+  ponctuels existent aujourd'hui.
 - Métriques Sharpe / drawdown : `metrics.ts` n'expose pour l'instant que le
   rendement total, conçu pour être étendu sans retoucher le reste.
 - Fenêtre ancrée/croissante (anchored/expanding window) : `runWalkForward`

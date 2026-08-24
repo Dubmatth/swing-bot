@@ -61,7 +61,9 @@ async function main(): Promise<void> {
       restSymbol: mapping.restSymbol,
       symbol: mapping.symbol,
       interval: INTERVAL,
-      count: strategy.warmup,
+      // Marge de sécurité d'une bougie contre les cas limites de frontière
+      // d'intervalle (filtrage sur `result.last`, voir krakenRestSeed.ts).
+      count: strategy.warmup + 1,
     });
     const builder = createLiveSeriesBuilder(mapping.symbol, INTERVAL);
     for (const bar of seedBars) {
