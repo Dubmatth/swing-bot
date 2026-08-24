@@ -26,6 +26,7 @@ export interface BacktestOptions {
   readonly fees: FeeSchedule;
   readonly slippageBps: number;
   readonly maxConcurrentPositions: number;
+  readonly riskPerTradePct: number;
 }
 
 export interface EquityPoint {
@@ -58,6 +59,9 @@ export function runBacktest(
   }
   if (!Number.isInteger(opts.maxConcurrentPositions) || opts.maxConcurrentPositions < 1) {
     throw new RangeError(`maxConcurrentPositions invalide : ${opts.maxConcurrentPositions}`);
+  }
+  if (!Number.isFinite(opts.riskPerTradePct) || !(opts.riskPerTradePct > 0)) {
+    throw new RangeError(`riskPerTradePct invalide : ${opts.riskPerTradePct}`);
   }
 
   const entries = [...series];
@@ -110,7 +114,13 @@ export function runBacktest(
           };
           for (const intent of strategy.decide(ctx)) {
             if (intent.kind === 'enter') {
-              queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'buy', reason: intent.reason });
+              queue.push({
+                kind: 'order-requested',
+                symbol: intent.symbol,
+                side: 'buy',
+                reason: intent.reason,
+                ...(intent.stopDistance !== undefined ? { stopDistance: intent.stopDistance } : {}),
+              });
             } else if (intent.kind === 'exit') {
               queue.push({ kind: 'order-requested', symbol: intent.symbol, side: 'sell', reason: intent.reason });
             }
@@ -133,6 +143,7 @@ export function runBacktest(
 
           const fillT = t + 1;
           const fillTime = targetSeries.time[fillT]!;
+          const referencePrice = targetSeries.open[fillT]!;
           let budget = 0;
 
           if (event.side === 'buy') {
@@ -157,6 +168,21 @@ export function runBacktest(
               break;
             }
             budget = Math.min(portfolio.cash, equitySnapshot / opts.maxConcurrentPositions);
+            if (event.stopDistance !== undefined) {
+              if (!(event.stopDistance > 0)) {
+                queue.push({
+                  kind: 'order-rejected',
+                  symbol: event.symbol,
+                  side: 'buy',
+                  reason: 'stopDistance invalide',
+                  time: fillTime,
+                });
+                break;
+              }
+              const riskBudget =
+                ((equitySnapshot * opts.riskPerTradePct) / event.stopDistance) * referencePrice;
+              budget = Math.min(budget, riskBudget);
+            }
             if (!(budget > 0)) {
               queue.push({
                 kind: 'order-rejected',
@@ -180,7 +206,6 @@ export function runBacktest(
             break;
           }
 
-          const referencePrice = targetSeries.open[fillT]!;
           if (event.side === 'buy') {
             const fill = simulateBuy(budget, referencePrice, execOpts);
             // Traité immédiatement (unshift, pas push) : un fill doit affecter le

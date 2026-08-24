@@ -68,7 +68,53 @@ function enterAllStrategy(symbols: readonly string[]): Strategy {
   };
 }
 
-const EXEC_OPTS = { initialCash: 1000, fees: DEFAULT_FEES, slippageBps: 10, maxConcurrentPositions: 1 };
+/** Émet enter(a) au démarrage, puis rotation exit(a)+enter(b) dans l'ordre donné dès que a est ouverte. */
+function rotateStrategy(a: string, b: string, exitFirst: boolean): Strategy {
+  return {
+    name: 'test-rotate',
+    warmup: 1,
+    params: {},
+    decide(ctx: StrategyContext) {
+      const hasA = ctx.positions.has(a);
+      const hasB = ctx.positions.has(b);
+      if (!hasA && !hasB) {
+        return [{ kind: 'enter', symbol: a, reason: 'init' }];
+      }
+      if (hasA && !hasB) {
+        const exitIntent: Intent = { kind: 'exit', symbol: a, reason: 'rotate' };
+        const enterIntent: Intent = { kind: 'enter', symbol: b, reason: 'rotate' };
+        return exitFirst ? [exitIntent, enterIntent] : [enterIntent, exitIntent];
+      }
+      return [{ kind: 'hold' }];
+    },
+  };
+}
+
+/** Émet toujours un enter avec le stopDistance donné (undefined = pas de sizing par risque). */
+function enterWithStopStrategy(stopDistance?: number): Strategy {
+  return {
+    name: 'test-enter-with-stop',
+    warmup: 1,
+    params: {},
+    decide(ctx: StrategyContext) {
+      if (ctx.positions.has(SYMBOL)) return [{ kind: 'hold' }];
+      return [{
+        kind: 'enter',
+        symbol: SYMBOL,
+        reason: 'test',
+        ...(stopDistance !== undefined ? { stopDistance } : {}),
+      }];
+    },
+  };
+}
+
+const EXEC_OPTS = {
+  initialCash: 1000,
+  fees: DEFAULT_FEES,
+  slippageBps: 10,
+  maxConcurrentPositions: 1,
+  riskPerTradePct: 1,
+};
 
 test('runBacktest : exécute un cycle achat puis vente au prochain open', () => {
   const opens = [100, 100, 110, 120];
@@ -141,6 +187,7 @@ test('runBacktest : partage le capital entre paires concurrentes selon maxConcur
     fees: DEFAULT_FEES,
     slippageBps: 10,
     maxConcurrentPositions: 2,
+    riskPerTradePct: 1,
   });
 
   assert.equal(result.portfolio.trades.length, 2);
@@ -169,6 +216,7 @@ test('runBacktest : rejette un signal au-delà du plafond de positions concurren
     fees: DEFAULT_FEES,
     slippageBps: 10,
     maxConcurrentPositions: 1,
+    riskPerTradePct: 1,
   });
 
   assert.equal(result.portfolio.positions.size, 1);
@@ -176,28 +224,6 @@ test('runBacktest : rejette un signal au-delà du plafond de positions concurren
   assert.ok(result.rejectedOrders > 0);
   assert.ok(result.rejectionReasons.some((r) => r.includes('plafond')));
 });
-
-/** Émet enter(a) au démarrage, puis rotation exit(a)+enter(b) dans l'ordre donné dès que a est ouverte. */
-function rotateStrategy(a: string, b: string, exitFirst: boolean): Strategy {
-  return {
-    name: 'test-rotate',
-    warmup: 1,
-    params: {},
-    decide(ctx: StrategyContext) {
-      const hasA = ctx.positions.has(a);
-      const hasB = ctx.positions.has(b);
-      if (!hasA && !hasB) {
-        return [{ kind: 'enter', symbol: a, reason: 'init' }];
-      }
-      if (hasA && !hasB) {
-        const exitIntent: Intent = { kind: 'exit', symbol: a, reason: 'rotate' };
-        const enterIntent: Intent = { kind: 'enter', symbol: b, reason: 'rotate' };
-        return exitFirst ? [exitIntent, enterIntent] : [enterIntent, exitIntent];
-      }
-      return [{ kind: 'hold' }];
-    },
-  };
-}
 
 test('runBacktest : sous plafond saturé, exit avant enter dans la même barre permet la rotation', () => {
   const opens = [100, 100, 110, 120];
@@ -213,6 +239,7 @@ test('runBacktest : sous plafond saturé, exit avant enter dans la même barre p
     fees: DEFAULT_FEES,
     slippageBps: 10,
     maxConcurrentPositions: 1,
+    riskPerTradePct: 1,
   });
 
   assert.equal(result.rejectedOrders, 0);
@@ -235,6 +262,7 @@ test('runBacktest : sous plafond saturé, enter avant exit dans la même barre p
     fees: DEFAULT_FEES,
     slippageBps: 10,
     maxConcurrentPositions: 1,
+    riskPerTradePct: 1,
   });
 
   assert.equal(result.rejectedOrders, 1);
@@ -274,4 +302,60 @@ test('runBacktest : maxConcurrentPositions non entier lève', () => {
     () => runBacktest(series, strategy, { ...EXEC_OPTS, maxConcurrentPositions: 1.5 }),
     /maxConcurrentPositions/,
   );
+});
+
+test('runBacktest : riskPerTradePct invalide lève', () => {
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, [100, 100, 110, 120], [100, 100, 110, 120], [0, 0, 0, 0])]]);
+  const strategy = alwaysFlipStrategy();
+  assert.throws(
+    () => runBacktest(series, strategy, { ...EXEC_OPTS, riskPerTradePct: 0 }),
+    /riskPerTradePct/,
+  );
+  assert.throws(
+    () => runBacktest(series, strategy, { ...EXEC_OPTS, riskPerTradePct: -1 }),
+    /riskPerTradePct/,
+  );
+});
+
+test('runBacktest : le sizing par risque plafonne le budget sous le plafond fraction fixe quand stopDistance est fourni', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, opens, closes, [0, 0, 0, 0])]]);
+  const strategy = enterWithStopStrategy(5);
+
+  // equitySnapshot=1000 (pas de position ouverte), riskPerTradePct=0.01,
+  // stopDistance=5, referencePrice=open[2]=110 :
+  // riskBudget = (1000*0.01/5)*110 = 220, plus petit que le plafond fraction
+  // fixe (1000, maxConcurrentPositions=1) — c'est lui qui doit gagner.
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.01,
+  });
+
+  assert.equal(result.portfolio.trades.length, 1);
+  const expectedFill = simulateBuy(220, 110, { fees: DEFAULT_FEES, slippageBps: 10 });
+  assert.ok(Math.abs((result.portfolio.trades[0]?.price ?? 0) - expectedFill.price) < 1e-9);
+  assert.ok(Math.abs((result.portfolio.trades[0]?.quantity ?? 0) - expectedFill.quantity) < 1e-9);
+});
+
+test('runBacktest : rejette proprement un stopDistance invalide plutôt que de planter', () => {
+  const opens = [100, 100, 110, 120];
+  const closes = [100, 100, 110, 120];
+  const series = new Map([[SYMBOL, seriesFrom(SYMBOL, opens, closes, [0, 0, 0, 0])]]);
+  const strategy = enterWithStopStrategy(-5);
+
+  const result = runBacktest(series, strategy, {
+    initialCash: 1000,
+    fees: DEFAULT_FEES,
+    slippageBps: 10,
+    maxConcurrentPositions: 1,
+    riskPerTradePct: 0.01,
+  });
+
+  assert.equal(result.portfolio.trades.length, 0);
+  assert.ok(result.rejectedOrders > 0);
+  assert.ok(result.rejectionReasons.some((r) => r.includes('stopDistance')));
 });
