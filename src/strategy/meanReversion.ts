@@ -28,6 +28,15 @@ export interface MeanReversionParams {
    * au-dessus de cette moyenne longue. N'affecte jamais la sortie.
    */
   readonly trendPeriod?: number;
+  /**
+   * Période de la moyenne de volume de confirmation, et multiplicateur du
+   * volume moyen requis à l'entrée — capitulation réelle plutôt qu'un creux
+   * sur volume ordinaire. Les deux doivent être fournis ensemble, ou pas du
+   * tout (défaut : aucun filtre, comportement inchangé). N'affecte jamais
+   * la sortie.
+   */
+  readonly volumePeriod?: number;
+  readonly volumeMultiplier?: number;
 }
 
 function sma(view: BarView, period: number): number {
@@ -46,8 +55,16 @@ function std(view: BarView, period: number): number {
   return s.value;
 }
 
+function avgVolume(view: BarView, period: number): number {
+  const s = new Sma(period);
+  for (let ago = period - 1; ago >= 0; ago--) {
+    s.update(view.volume(ago));
+  }
+  return s.value;
+}
+
 export function createMeanReversion(params: MeanReversionParams): Strategy {
-  const { symbol, period, entryK, trendPeriod } = params;
+  const { symbol, period, entryK, trendPeriod, volumePeriod, volumeMultiplier } = params;
   if (!Number.isInteger(period) || period < 2) {
     throw new RangeError(`Période invalide : ${period}`);
   }
@@ -57,13 +74,28 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
   if (trendPeriod !== undefined && (!Number.isInteger(trendPeriod) || trendPeriod <= period)) {
     throw new RangeError(`trendPeriod invalide : ${trendPeriod} (doit être > period=${period})`);
   }
+  if ((volumePeriod === undefined) !== (volumeMultiplier === undefined)) {
+    throw new RangeError('volumePeriod et volumeMultiplier doivent être fournis ensemble');
+  }
+  if (volumePeriod !== undefined && (!Number.isInteger(volumePeriod) || volumePeriod < 2)) {
+    throw new RangeError(`volumePeriod invalide : ${volumePeriod}`);
+  }
+  if (volumeMultiplier !== undefined && !(volumeMultiplier > 0)) {
+    throw new RangeError(`volumeMultiplier invalide : ${volumeMultiplier}`);
+  }
 
-  const warmup = trendPeriod !== undefined ? Math.max(period, trendPeriod) : period;
+  const warmup = Math.max(period, trendPeriod ?? 0, volumePeriod ?? 0);
 
   return {
     name: 'mean-reversion',
     warmup,
-    params: { period, entryK, ...(trendPeriod !== undefined ? { trendPeriod } : {}) },
+    params: {
+      period,
+      entryK,
+      ...(trendPeriod !== undefined ? { trendPeriod } : {}),
+      ...(volumePeriod !== undefined ? { volumePeriod } : {}),
+      ...(volumeMultiplier !== undefined ? { volumeMultiplier } : {}),
+    },
     decide(ctx: StrategyContext): readonly Intent[] {
       const view = ctx.views.get(symbol);
       if (!view) return [{ kind: 'hold' }];
@@ -74,8 +106,12 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
       const hasPosition = ctx.positions.has(symbol);
       const threshold = smaVal - entryK * stdVal;
       const trendOk = trendPeriod === undefined || price > sma(view, trendPeriod);
+      const volumeOk =
+        volumePeriod === undefined ||
+        volumeMultiplier === undefined ||
+        view.volume(0) >= volumeMultiplier * avgVolume(view, volumePeriod);
 
-      if (!hasPosition && price < threshold && trendOk) {
+      if (!hasPosition && price < threshold && trendOk && volumeOk) {
         return [{
           kind: 'enter',
           symbol,

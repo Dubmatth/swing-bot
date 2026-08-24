@@ -33,6 +33,29 @@ function ctxFor(closes: number[], position?: Position): StrategyContext {
   return { views: new Map([[SYMBOL, view]]), positions, now: view.time(0) };
 }
 
+function seriesFromWithVolume(closes: number[], volumes: number[]): BarSeries {
+  const c = emptyColumns();
+  closes.forEach((close, i) => {
+    c.time.push(i * STEP);
+    c.open.push(close);
+    c.high.push(close);
+    c.low.push(close);
+    c.close.push(close);
+    c.volume.push(volumes[i] ?? 1);
+    c.trades.push(1);
+    c.synthetic.push(0);
+  });
+  return freezeSeries(SYMBOL, 240, c);
+}
+
+function ctxForWithVolume(closes: number[], volumes: number[], position?: Position): StrategyContext {
+  const series = seriesFromWithVolume(closes, volumes);
+  const view = new BarView(series, series.length - 1);
+  const positions = new Map<string, Position>();
+  if (position) positions.set(SYMBOL, position);
+  return { views: new Map([[SYMBOL, view]]), positions, now: view.time(0) };
+}
+
 test('createMeanReversion : warmup vaut la période, params exposés', () => {
   const s = createMeanReversion({ symbol: SYMBOL, period: 5, entryK: 2 });
   assert.equal(s.warmup, 5);
@@ -130,4 +153,64 @@ test('decide : sans trendPeriod, le même repli en tendance baissière déclench
   const intents = s.decide(ctx);
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.kind, 'enter');
+});
+
+test('createMeanReversion : warmup inclut volumePeriod, params exposés', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, volumePeriod: 6, volumeMultiplier: 1.5 });
+  assert.equal(s.warmup, 6);
+  assert.deepEqual(s.params, { period: 4, entryK: 1, volumePeriod: 6, volumeMultiplier: 1.5 });
+});
+
+test('createMeanReversion : lève si volumePeriod est fourni sans volumeMultiplier', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, volumePeriod: 6 }),
+    /volumePeriod.*volumeMultiplier|ensemble/,
+  );
+});
+
+test('createMeanReversion : lève si volumeMultiplier est fourni sans volumePeriod', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, volumeMultiplier: 1.5 }),
+    /volumePeriod.*volumeMultiplier|ensemble/,
+  );
+});
+
+test('createMeanReversion : lève si volumePeriod est invalide', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, volumePeriod: 1, volumeMultiplier: 1.5 }),
+    /volumePeriod/,
+  );
+});
+
+test('createMeanReversion : lève si volumeMultiplier est invalide', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, volumePeriod: 4, volumeMultiplier: 0 }),
+    /volumeMultiplier/,
+  );
+});
+
+test("decide : le filtre de volume bloque une entrée sur volume ordinaire", () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1, volumePeriod: 4, volumeMultiplier: 2 });
+  // Seuil d'entrée franchi (comme le test sans filtre), mais volume de la
+  // barre courante égal à la moyenne — pas de confirmation de capitulation.
+  const ctx = ctxForWithVolume([10, 10, 10, 10, 5], [1, 1, 1, 1, 1]);
+  assert.equal(s.decide(ctx)[0]?.kind, 'hold');
+});
+
+test("decide : le filtre de volume autorise une entrée sur volume élevé", () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1, volumePeriod: 4, volumeMultiplier: 2 });
+  // Même repli de prix, mais la barre courante a un volume 5x la moyenne
+  // des barres précédentes (1,1,1) -> confirmation de capitulation.
+  const ctx = ctxForWithVolume([10, 10, 10, 10, 5], [1, 1, 1, 1, 5]);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter');
+});
+
+test('decide : sans volumePeriod/volumeMultiplier, le volume est ignoré (comportement inchangé)', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 3, entryK: 1 });
+  const ctx = ctxForWithVolume([10, 10, 10, 10, 5], [1, 1, 1, 1, 0.01]); // volume très faible
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter'); // toujours une entrée : le volume n'est pas pris en compte
 });
