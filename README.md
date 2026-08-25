@@ -168,10 +168,14 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   plus serrés, le filtre se déclenche réellement (1 entrée bloquée sur
   ~57-58 à `0,075`, 4 à 5 à `0,06`) et **dégrade** le résultat :
   period=70 → +0,57 % (12/37) à 0,075 puis +0,50 % (11/37) à 0,06 ;
-  period=80 → +0,63 % (13/37) à 0,075 puis +0,52 % (13/37) à 0,06. Les
-  quelques entrées bloquées à ces seuils sont donc en moyenne plus
-  rentables que le reste, pas moins : le filtre écarte le signal le plus
-  fort au lieu d'un faux signal. Aucun réglage ne dépasse la référence.
+  period=80 → +0,63 % (13/37) à 0,075 puis +0,52 % (13/37) à 0,06. La
+  dégradation observée est cohérente avec l'hypothèse que les entrées
+  bloquées à ces seuils étaient en moyenne rentables plutôt que du bruit
+  — mais l'instrumentation utilisée (comptage des tentatives d'entrée
+  dépassant le seuil) ne mesure pas directement la rentabilité
+  individuelle des trades bloqués ; l'effet pourrait aussi refléter une
+  réallocation de capital au sein des fenêtres plutôt qu'un lien causal
+  direct trade par trade. Aucun réglage ne dépasse la référence.
   Le filtre de régime de volatilité **n'apporte rien de plus** sur cette
   période : non retenu, le candidat sans filtre de régime de volatilité
   reste la référence.
