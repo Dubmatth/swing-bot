@@ -94,6 +94,7 @@ scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur le
 scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
 scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
 scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
+scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 ```
 
@@ -218,6 +219,46 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   le churn), quasi neutre hors échantillon (-0,28 %) mais avec un écart
   in/hors-échantillon plus marqué que mean-reversion. Ni pire ni meilleur
   que le candidat déjà trouvé — non retenue, non creusée davantage.
+
+- **Stop de temps** (sortie forcée après `maxHoldBars` barres si le retour
+  à la moyenne ne s'est pas encore produit — `maxHoldBars` sur
+  `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
+  (grille fixe de 6 réglages, aucune sélection), `maxHoldBars` ∈
+  {75 ; 90 ; 110} contre les deux références `period=70/80, entryK=4`
+  (chiffres imprimés par `scripts/tune-mean-reversion-timestop.ts`).
+  Référence sans stop : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec stop de temps, les six réglages sont
+  **strictement identiques à la référence à 2 décimales** : period=70 →
+  +0,67 % (12/37) aux trois valeurs de `maxHoldBars` (75, 90, 110) ;
+  period=80 → +0,71 % (13/37) aux trois. Ce n'est pourtant pas un cas où
+  le mécanisme reste inerte faute de se déclencher : le script compte
+  69/32/5 sorties par stop de temps pour period=70 (`maxHoldBars`=75/90/110
+  respectivement, contre 330/372/394 sorties par retour à la moyenne) et
+  98/71/10 pour period=80 (mêmes réglages, contre 261/293/349 par retour à
+  la moyenne) — le stop de temps se déclenche donc bel et bien, plusieurs
+  dizaines de fois par réglage. Ce comptage porte cependant sur
+  **l'entraînement et le test combinés de chaque fold** (1095 barres
+  d'entraînement + 180 barres de test, donc environ 86 % de barres
+  d'entraînement par fold — voir le commentaire du script), et pas
+  spécifiquement sur les fenêtres réellement mesurées hors échantillon.
+  Le fait que le rendement hors échantillon soit inchangé à la fois en
+  moyenne et fenêtre gagnante par fenêtre gagnante, malgré des dizaines de
+  déclenchements comptés, combiné à la part écrasante de barres
+  d'entraînement dans ce comptage, suggère que les déclenchements se
+  concentrent dans la portion entraînement de chaque fold : avec
+  `entryK=4` (creux profond avant d'entrer), le retour à la moyenne semble
+  intervenir en pratique bien avant `maxHoldBars=75` barres pour les
+  positions ouvertes à l'intérieur d'une fenêtre de test de 180 barres,
+  si bien que le stop de temps n'a jamais l'occasion de devancer la sortie
+  normale sur les trades effectivement mesurés hors échantillon. C'est une
+  inférence tirée du comptage imprimé par le script committé, pas une
+  mesure directe train/test séparée : le compteur ne distingue pas les
+  deux fenêtres, par choix explicite documenté dans le script lui-même —
+  suffisant pour répondre à « le mécanisme se déclenche-t-il, et à quelle
+  fréquence relative par rapport au retour à la moyenne », pas à « où
+  précisément dans le fold ». Le stop de temps **n'apporte rien de plus**
+  sur cette période : non retenu, le candidat sans stop de temps reste la
+  référence.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un
