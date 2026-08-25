@@ -94,6 +94,7 @@ scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur le
 scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
 scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
 scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
+scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 ```
 
@@ -218,6 +219,48 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   le churn), quasi neutre hors échantillon (-0,28 %) mais avec un écart
   in/hors-échantillon plus marqué que mean-reversion. Ni pire ni meilleur
   que le candidat déjà trouvé — non retenue, non creusée davantage.
+
+- **Stop de temps** (sortie forcée après `maxHoldBars` barres si le retour
+  à la moyenne ne s'est pas encore produit — `maxHoldBars` sur
+  `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
+  (grille fixe de 6 réglages, aucune sélection), `maxHoldBars` ∈
+  {75 ; 90 ; 110} contre les deux références `period=70/80, entryK=4`
+  (chiffres imprimés par `scripts/tune-mean-reversion-timestop.ts`).
+  Référence sans stop : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec stop de temps, les six réglages sont
+  **strictement identiques à la référence**, y compris en pleine précision
+  (max(|diff|) = 0 sur les 37 folds pour chacun des 6 réglages, pas
+  seulement l'arrondi à 2 décimales) : period=70 → +0,67 % (12/37) aux
+  trois valeurs de `maxHoldBars` (75, 90, 110) ; period=80 → +0,71 % (13/37)
+  aux trois. Le compteur train+test combiné (entraînement et test de
+  chaque fold réunis) rapporte bien des dizaines de sorties par stop de
+  temps par réglage (69/32/5 pour period=70 à `maxHoldBars`=75/90/110,
+  98/71/10 pour period=80), mais ce compteur mélange les deux fenêtres. En
+  isolant strictement les 37 fenêtres de test walk-forward (sans la
+  portion d'entraînement), le stop de temps se déclenche **zéro fois**,
+  pour les 6 réglages testés.
+  Ce n'est pas qu'une absence empirique : c'est en partie **structurellement
+  impossible**. `runBacktest` (`src/backtest/runner.ts`) itère `t` de
+  `strategy.warmup` (= `period` ici) à `length-2`, et une entrée se remplit
+  à `t+1` ; dans une fenêtre de test isolée de 180 barres, le `barsHeld`
+  maximal atteignable est donc 178-71=107 pour `period=70` et 178-81=97
+  pour `period=80`. **`maxHoldBars=110` ne peut donc jamais se déclencher
+  dans aucune fenêtre de test, pour aucune des deux périodes** — 2 des 6
+  points de grille sont hors d'atteinte par construction. Les 4 autres
+  réglages (75/90 aux deux périodes) restent atteignables en théorie mais
+  ne se déclenchent jamais empiriquement sur ces 37 fenêtres : avec
+  `entryK=4` (creux profond avant d'entrer), le retour à la moyenne semble
+  intervenir avant `maxHoldBars` barres pour les positions ouvertes dans
+  ces fenêtres. C'est la même famille de problème que le non-déclenchement
+  structurel de `maxVolatilityRatio=0,09` en Phase 7 (grille calibrée sans
+  vérifier ce qui est réellement mesurable par le harnais walk-forward),
+  mais sur un axe différent : ici la longueur de la fenêtre de test
+  (`testBars=180`), pas la distribution du signal d'entrée.
+  La conclusion honnête n'est donc pas « neutre » mais **non concluant** :
+  ce harnais walk-forward (`testBars=180`) ne peut pas mesurer un stop de
+  temps de 75 à 110 barres hors échantillon. Non retenu — comme tout
+  résultat non concluant, il ne devient pas un candidat adopté — le
+  candidat sans stop de temps reste la référence.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un

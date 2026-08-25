@@ -45,6 +45,14 @@ export interface MeanReversionParams {
    * pas de nouvelle fenêtre, pas de nouveau paramètre de période.
    */
   readonly maxVolatilityRatio?: number;
+  /**
+   * Nombre maximal de barres qu'une position peut rester ouverte avant une
+   * sortie forcée, si le retour à la moyenne (price >= sma) ne s'est pas
+   * encore produit. Sans lui (défaut), aucune limite — comportement actuel
+   * inchangé. N'affecte jamais l'entrée. La sortie par retour à la moyenne
+   * reste prioritaire si les deux conditions sont vraies en même temps.
+   */
+  readonly maxHoldBars?: number;
 }
 
 function sma(view: BarView, period: number): number {
@@ -72,7 +80,7 @@ function avgVolume(view: BarView, period: number): number {
 }
 
 export function createMeanReversion(params: MeanReversionParams): Strategy {
-  const { symbol, period, entryK, trendPeriod, volumePeriod, volumeMultiplier, maxVolatilityRatio } = params;
+  const { symbol, period, entryK, trendPeriod, volumePeriod, volumeMultiplier, maxVolatilityRatio, maxHoldBars } = params;
   if (!Number.isInteger(period) || period < 2) {
     throw new RangeError(`Période invalide : ${period}`);
   }
@@ -94,6 +102,9 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
   if (maxVolatilityRatio !== undefined && !(maxVolatilityRatio > 0)) {
     throw new RangeError(`maxVolatilityRatio invalide : ${maxVolatilityRatio}`);
   }
+  if (maxHoldBars !== undefined && (!Number.isInteger(maxHoldBars) || maxHoldBars < 1)) {
+    throw new RangeError(`maxHoldBars invalide : ${maxHoldBars}`);
+  }
 
   const warmup = Math.max(period, trendPeriod ?? 0, volumePeriod ?? 0);
 
@@ -107,6 +118,7 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
       ...(volumePeriod !== undefined ? { volumePeriod } : {}),
       ...(volumeMultiplier !== undefined ? { volumeMultiplier } : {}),
       ...(maxVolatilityRatio !== undefined ? { maxVolatilityRatio } : {}),
+      ...(maxHoldBars !== undefined ? { maxHoldBars } : {}),
     },
     decide(ctx: StrategyContext): readonly Intent[] {
       const view = ctx.views.get(symbol);
@@ -115,7 +127,8 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
       const smaVal = sma(view, period);
       const stdVal = std(view, period);
       const price = view.close(0);
-      const hasPosition = ctx.positions.has(symbol);
+      const position = ctx.positions.get(symbol);
+      const hasPosition = position !== undefined;
       const threshold = smaVal - entryK * stdVal;
       const trendOk = trendPeriod === undefined || price > sma(view, trendPeriod);
       const volumeOk =
@@ -131,12 +144,25 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
           reason: `prix=${price.toFixed(4)} < sma(${period})-${entryK}·std=${threshold.toFixed(4)}`,
         }];
       }
-      if (hasPosition && price >= smaVal) {
-        return [{
-          kind: 'exit',
-          symbol,
-          reason: `prix=${price.toFixed(4)} >= sma(${period})=${smaVal.toFixed(4)}`,
-        }];
+      if (position) {
+        if (price >= smaVal) {
+          return [{
+            kind: 'exit',
+            symbol,
+            reason: `prix=${price.toFixed(4)} >= sma(${period})=${smaVal.toFixed(4)}`,
+          }];
+        }
+        if (maxHoldBars !== undefined) {
+          const barInterval = view.time(0) - view.time(1);
+          const barsHeld = Math.round((ctx.now - position.entryTime) / barInterval);
+          if (barsHeld >= maxHoldBars) {
+            return [{
+              kind: 'exit',
+              symbol,
+              reason: `stop de temps : ${barsHeld} barres détenues >= maxHoldBars=${maxHoldBars}`,
+            }];
+          }
+        }
       }
       return [{ kind: 'hold' }];
     },
