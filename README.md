@@ -228,37 +228,39 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   (chiffres imprimés par `scripts/tune-mean-reversion-timestop.ts`).
   Référence sans stop : period=70 → +0,67 % (12/37 fenêtres gagnantes),
   period=80 → +0,71 % (13/37). Avec stop de temps, les six réglages sont
-  **strictement identiques à la référence à 2 décimales** : period=70 →
-  +0,67 % (12/37) aux trois valeurs de `maxHoldBars` (75, 90, 110) ;
-  period=80 → +0,71 % (13/37) aux trois. Ce n'est pourtant pas un cas où
-  le mécanisme reste inerte faute de se déclencher : le script compte
-  69/32/5 sorties par stop de temps pour period=70 (`maxHoldBars`=75/90/110
-  respectivement, contre 330/372/394 sorties par retour à la moyenne) et
-  98/71/10 pour period=80 (mêmes réglages, contre 261/293/349 par retour à
-  la moyenne) — le stop de temps se déclenche donc bel et bien, plusieurs
-  dizaines de fois par réglage. Ce comptage porte cependant sur
-  **l'entraînement et le test combinés de chaque fold** (1095 barres
-  d'entraînement + 180 barres de test, donc environ 86 % de barres
-  d'entraînement par fold — voir le commentaire du script), et pas
-  spécifiquement sur les fenêtres réellement mesurées hors échantillon.
-  Le fait que le rendement hors échantillon soit inchangé à la fois en
-  moyenne et fenêtre gagnante par fenêtre gagnante, malgré des dizaines de
-  déclenchements comptés, combiné à la part écrasante de barres
-  d'entraînement dans ce comptage, suggère que les déclenchements se
-  concentrent dans la portion entraînement de chaque fold : avec
+  **strictement identiques à la référence**, y compris en pleine précision
+  (max(|diff|) = 0 sur les 37 folds pour chacun des 6 réglages, pas
+  seulement l'arrondi à 2 décimales) : period=70 → +0,67 % (12/37) aux
+  trois valeurs de `maxHoldBars` (75, 90, 110) ; period=80 → +0,71 % (13/37)
+  aux trois. Le compteur train+test combiné (entraînement et test de
+  chaque fold réunis) rapporte bien des dizaines de sorties par stop de
+  temps par réglage (69/32/5 pour period=70 à `maxHoldBars`=75/90/110,
+  98/71/10 pour period=80), mais ce compteur mélange les deux fenêtres. En
+  isolant strictement les 37 fenêtres de test walk-forward (sans la
+  portion d'entraînement), le stop de temps se déclenche **zéro fois**,
+  pour les 6 réglages testés.
+  Ce n'est pas qu'une absence empirique : c'est en partie **structurellement
+  impossible**. `runBacktest` (`src/backtest/runner.ts`) itère `t` de
+  `strategy.warmup` (= `period` ici) à `length-2`, et une entrée se remplit
+  à `t+1` ; dans une fenêtre de test isolée de 180 barres, le `barsHeld`
+  maximal atteignable est donc 178-71=107 pour `period=70` et 178-81=97
+  pour `period=80`. **`maxHoldBars=110` ne peut donc jamais se déclencher
+  dans aucune fenêtre de test, pour aucune des deux périodes** — 2 des 6
+  points de grille sont hors d'atteinte par construction. Les 4 autres
+  réglages (75/90 aux deux périodes) restent atteignables en théorie mais
+  ne se déclenchent jamais empiriquement sur ces 37 fenêtres : avec
   `entryK=4` (creux profond avant d'entrer), le retour à la moyenne semble
-  intervenir en pratique bien avant `maxHoldBars=75` barres pour les
-  positions ouvertes à l'intérieur d'une fenêtre de test de 180 barres,
-  si bien que le stop de temps n'a jamais l'occasion de devancer la sortie
-  normale sur les trades effectivement mesurés hors échantillon. C'est une
-  inférence tirée du comptage imprimé par le script committé, pas une
-  mesure directe train/test séparée : le compteur ne distingue pas les
-  deux fenêtres, par choix explicite documenté dans le script lui-même —
-  suffisant pour répondre à « le mécanisme se déclenche-t-il, et à quelle
-  fréquence relative par rapport au retour à la moyenne », pas à « où
-  précisément dans le fold ». Le stop de temps **n'apporte rien de plus**
-  sur cette période : non retenu, le candidat sans stop de temps reste la
-  référence.
+  intervenir avant `maxHoldBars` barres pour les positions ouvertes dans
+  ces fenêtres. C'est la même famille de problème que le non-déclenchement
+  structurel de `maxVolatilityRatio=0,09` en Phase 7 (grille calibrée sans
+  vérifier ce qui est réellement mesurable par le harnais walk-forward),
+  mais sur un axe différent : ici la longueur de la fenêtre de test
+  (`testBars=180`), pas la distribution du signal d'entrée.
+  La conclusion honnête n'est donc pas « neutre » mais **non concluant** :
+  ce harnais walk-forward (`testBars=180`) ne peut pas mesurer un stop de
+  temps de 75 à 110 barres hors échantillon. Non retenu — comme tout
+  résultat non concluant, il ne devient pas un candidat adopté — le
+  candidat sans stop de temps reste la référence.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un

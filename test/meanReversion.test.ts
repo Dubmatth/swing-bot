@@ -100,6 +100,10 @@ test('decide : signal de sortie quand le prix revient à la moyenne, position ou
   const intents = s.decide(ctx);
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.kind, 'exit');
+  // Contrat consommé par scripts/tune-mean-reversion-timestop.ts pour classer
+  // les sorties par catégorie : une sortie par retour à la moyenne ne doit
+  // JAMAIS commencer par le préfixe réservé au stop de temps.
+  assert.equal(intents[0]?.kind === 'exit' && intents[0].reason.startsWith('stop de temps'), false);
 });
 
 test('decide : hold si position ouverte et prix encore sous la moyenne', () => {
@@ -297,6 +301,10 @@ test('decide : le stop de temps force une sortie après maxHoldBars barres sans 
   const intents = s.decide(ctx);
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.kind, 'exit');
+  // Contrat consommé par scripts/tune-mean-reversion-timestop.ts (classement
+  // des sorties par catégorie via `reason.startsWith('stop de temps')`) : pin
+  // le préfixe littéral produit par la sortie forcée par le temps.
+  assert.equal(intents[0]?.kind === 'exit' && intents[0].reason.startsWith('stop de temps'), true);
 });
 
 test("decide : pas de sortie forcée tant que maxHoldBars n'est pas atteint", () => {
