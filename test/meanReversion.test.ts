@@ -265,3 +265,68 @@ test("decide : le filtre de régime de volatilité n'affecte jamais la sortie", 
   const ctx = ctxFor([5, 10, 10, 10, 20], position);
   assert.equal(s.decide(ctx)[0]?.kind, 'exit');
 });
+
+test('createMeanReversion : lève si maxHoldBars est invalide (non entier)', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 2.5 }),
+    /maxHoldBars/,
+  );
+});
+
+test('createMeanReversion : lève si maxHoldBars est invalide (< 1)', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 0 }),
+    /maxHoldBars/,
+  );
+});
+
+test("createMeanReversion : maxHoldBars n'affecte pas warmup, params exposés", () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 5 });
+  assert.equal(s.warmup, 4);
+  assert.deepEqual(s.params, { period: 4, entryK: 1, maxHoldBars: 5 });
+});
+
+test('decide : le stop de temps force une sortie après maxHoldBars barres sans retour à la moyenne', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 5 });
+  // closes[4..7]=[10,10,10,9] -> sma=9.75, prix=9 < sma : pas de sortie par
+  // retour à la moyenne. Position ouverte à l'index 0 (barre 0), barre
+  // courante = index 7 -> 7 barres détenues >= maxHoldBars=5.
+  const closes = [10, 10, 10, 10, 10, 10, 10, 9];
+  const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 10, entryTime: 0 };
+  const ctx = ctxFor(closes, position);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'exit');
+});
+
+test("decide : pas de sortie forcée tant que maxHoldBars n'est pas atteint", () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 10 });
+  // Même série (7 barres détenues), mais maxHoldBars=10 > 7 : pas encore atteint.
+  const closes = [10, 10, 10, 10, 10, 10, 10, 9];
+  const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 10, entryTime: 0 };
+  const ctx = ctxFor(closes, position);
+  assert.equal(s.decide(ctx)[0]?.kind, 'hold');
+});
+
+test('decide : sans maxHoldBars, aucune sortie forcée par le temps (comportement inchangé)', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1 });
+  // Même série que les deux tests précédents (7 barres détenues), mais pas
+  // de maxHoldBars : la position resterait ouverte indéfiniment.
+  const closes = [10, 10, 10, 10, 10, 10, 10, 9];
+  const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 10, entryTime: 0 };
+  const ctx = ctxFor(closes, position);
+  assert.equal(s.decide(ctx)[0]?.kind, 'hold');
+});
+
+test('decide : le retour à la moyenne reste prioritaire sur le stop de temps', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxHoldBars: 5 });
+  // Retour à la moyenne (prix=10 >= sma=10) ET maxHoldBars atteint (7 >= 5)
+  // simultanément : la sortie doit se déclencher (peu importe la raison
+  // exacte rapportée), pas rester bloquée.
+  const closes = [10, 10, 10, 10, 10, 10, 10, 10];
+  const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 10, entryTime: 0 };
+  const ctx = ctxFor(closes, position);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'exit');
+});
