@@ -93,6 +93,7 @@ scripts/convert-trades.ts Convertit les CSV "Time & Sales" en bougies OHLCVT (vo
 scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur les 20 paires réelles
 scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
 scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
+scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 ```
 
@@ -147,6 +148,33 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   pire dégradé. Le filtre de volume **n'apporte rien de plus** sur cette
   période : non retenu, le candidat sans filtre de volume reste la
   référence.
+- **Filtre de régime de volatilité** (bloquer une entrée quand
+  std(period)/sma(period) dépasse un seuil — `maxVolatilityRatio` sur
+  `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
+  (grille fixe de 6 réglages, aucune sélection), `maxVolatilityRatio` ∈
+  {0,06 ; 0,075 ; 0,09} contre les deux références `period=70/80,
+  entryK=4`. Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres
+  gagnantes), period=80 → +0,71 % (13/37). Avec filtre, à
+  `maxVolatilityRatio=0,09` le résultat est **bit-identique** à la
+  référence pour les deux périodes (vérifié fold par fold en pleine
+  précision, pas seulement à 2 décimales) — instrumentation dédiée à
+  l'appui : sur les 37 fenêtres de test, aucune des ~57-58 tentatives
+  d'entrée réelles (`!hasPosition && prix < seuil`) n'atteint un
+  coefficient de variation > 0,09 ; le filtre ne se déclenche donc
+  jamais dans ces fenêtres. Contrairement au filtre de volume en Phase 6
+  (où le non-effet venait de `maxConcurrentPositions`/capital masquant
+  des entrées réellement bloquées), c'est ici un vrai non-déclenchement
+  du filtre lui-même, pas un plafond qui masque son effet. Aux seuils
+  plus serrés, le filtre se déclenche réellement (1 entrée bloquée sur
+  ~57-58 à `0,075`, 4 à 5 à `0,06`) et **dégrade** le résultat :
+  period=70 → +0,57 % (12/37) à 0,075 puis +0,50 % (11/37) à 0,06 ;
+  period=80 → +0,63 % (13/37) à 0,075 puis +0,52 % (13/37) à 0,06. Les
+  quelques entrées bloquées à ces seuils sont donc en moyenne plus
+  rentables que le reste, pas moins : le filtre écarte le signal le plus
+  fort au lieu d'un faux signal. Aucun réglage ne dépasse la référence.
+  Le filtre de régime de volatilité **n'apporte rien de plus** sur cette
+  période : non retenu, le candidat sans filtre de régime de volatilité
+  reste la référence.
 - **Force relative / momentum cross-sectionnel** (classer les 20 paires
   par performance récente, détenir seulement les meilleures) : famille de
   signal explorée en spike (jetable, jamais formalisée en code de
