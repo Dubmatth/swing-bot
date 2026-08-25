@@ -153,29 +153,59 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
   (grille fixe de 6 réglages, aucune sélection), `maxVolatilityRatio` ∈
   {0,06 ; 0,075 ; 0,09} contre les deux références `period=70/80,
-  entryK=4`. Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres
-  gagnantes), period=80 → +0,71 % (13/37). Avec filtre, à
-  `maxVolatilityRatio=0,09` le résultat est **bit-identique** à la
-  référence pour les deux périodes (vérifié fold par fold en pleine
-  précision, pas seulement à 2 décimales) — instrumentation dédiée à
-  l'appui : sur les 37 fenêtres de test, aucune des ~57-58 tentatives
-  d'entrée réelles (`!hasPosition && prix < seuil`) n'atteint un
-  coefficient de variation > 0,09 ; le filtre ne se déclenche donc
-  jamais dans ces fenêtres. Contrairement au filtre de volume en Phase 6
-  (où le non-effet venait de `maxConcurrentPositions`/capital masquant
-  des entrées réellement bloquées), c'est ici un vrai non-déclenchement
-  du filtre lui-même, pas un plafond qui masque son effet. Aux seuils
-  plus serrés, le filtre se déclenche réellement (1 entrée bloquée sur
-  ~57-58 à `0,075`, 4 à 5 à `0,06`) et **dégrade** le résultat :
-  period=70 → +0,57 % (12/37) à 0,075 puis +0,50 % (11/37) à 0,06 ;
-  period=80 → +0,63 % (13/37) à 0,075 puis +0,52 % (13/37) à 0,06. La
-  dégradation observée est cohérente avec l'hypothèse que les entrées
-  bloquées à ces seuils étaient en moyenne rentables plutôt que du bruit
-  — mais l'instrumentation utilisée (comptage des tentatives d'entrée
-  dépassant le seuil) ne mesure pas directement la rentabilité
-  individuelle des trades bloqués ; l'effet pourrait aussi refléter une
-  réallocation de capital au sein des fenêtres plutôt qu'un lien causal
-  direct trade par trade. Aucun réglage ne dépasse la référence.
+  entryK=4`. Cette grille avait été calibrée (voir la spec) sur la
+  distribution *inconditionnelle* du ratio std/sma sur toutes les barres ;
+  mais le filtre n'agit qu'au moment d'une tentative d'entrée, et cette
+  distribution *conditionnelle à un signal d'entrée* est bien plus
+  resserrée — médiane 0,0310 (period=70) / 0,0369 (period=80), maximum
+  0,0762 (period=70) / 0,0794 (period=80) sur les 58 (period=70) et 57
+  (period=80) tentatives d'entrée réelles des 37 fenêtres de test
+  (chiffres imprimés par `scripts/tune-mean-reversion-volatility.ts`
+  lui-même, section « tentatives d'entrée réelles »). Le réglage `0,09`
+  était donc structurellement hors d'atteinte — aucune valeur observée ne
+  peut jamais le dépasser — et pas un non-effet empirique parmi d'autres.
+  Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec filtre, à `maxVolatilityRatio=0,09`
+  le résultat est **bit-identique** à la référence pour les deux périodes
+  — le script imprime le rendement de chaque fold en pleine précision
+  pour les deux runs et `max(|diff|) = 0` sur les 37 folds des deux
+  périodes, pas seulement une égalité à 2 décimales : sur les 58/57
+  tentatives d'entrée réelles mesurées, aucune n'atteint un coefficient
+  de variation > 0,09 ; le filtre ne se déclenche donc jamais dans ces
+  fenêtres. Contrairement au filtre de volume en Phase 6 (où le non-effet
+  venait de `maxConcurrentPositions`/capital masquant des entrées
+  réellement bloquées), c'est ici un vrai non-déclenchement du filtre
+  lui-même, pas un plafond qui masque son effet. Aux seuils plus serrés,
+  le filtre se déclenche réellement (1 entrée bloquée sur 58/57 à
+  `0,075` ; 4 à `0,06` pour period=70, 5 pour period=80) et le résultat
+  mesuré se dégrade : period=70 → +0,57 % (12/37) à 0,075 puis +0,50 %
+  (11/37) à 0,06 ; period=80 → +0,63 % (13/37) à 0,075 puis +0,52 %
+  (13/37) à 0,06. Cette dégradation doit être lue avec prudence : les
+  entrées bloquées à ces seuils ne forment pas un échantillon indépendant
+  — elles se concentrent sur deux ou trois dates calendaires seulement
+  (2023-06-10 : SOLEUR, ADAEUR ; 2024-08-05 : ETHEUR, LINKEUR, UNIEUR ;
+  2024-12-20 : XDGEUR isolé), et une seule des sept entrées bloquées est
+  un aller-retour clos dans sa fenêtre de test (XDGEUR, +376 € réalisés,
+  qui à lui seul explique tout le delta de -3,76pp du fold où il
+  apparaît) — les autres étaient encore ouvertes à la fin de leur fenêtre
+  de test, valorisées au prix du marché plutôt que closes : au fold
+  period=70 où l'écart est le plus visible, le rendement de référence
+  (+2,72 %) provient entièrement de deux positions encore ouvertes,
+  contre 0,0000 % exactement pour la version filtrée qui n'a aucun trade
+  sur cette fenêtre. Le même standard que celui appliqué plus haut
+  (period>100/entryK>4,5, rejeté pour trop peu de trades actifs)
+  s'applique ici : la conclusion « non retenu » reste correcte — aucun
+  réglage ne démontre de gain — mais elle ne doit pas être lue comme une
+  dégradation établie sur un échantillon indépendant de trades clos.
+  Limite supplémentaire, indépendante de la taille d'échantillon : la
+  fenêtre std/sma inclut la barre de creux courante, donc le filtre
+  remesure en partie la profondeur du creux qui déclenche le signal
+  d'entrée plutôt qu'un régime de volatilité préexistant (partiellement
+  colinéaire avec `entryK`) — un choix défendable pour ne pas ajouter de
+  degré de liberté (voir la spec), mais le proxy implémenté n'est donc
+  pas une mesure de régime pure ; une piste future serait de mesurer ce
+  ratio sur une fenêtre décalée (excluant la barre courante), sans que
+  cela change la conclusion de cette phase.
   Le filtre de régime de volatilité **n'apporte rien de plus** sur cette
   période : non retenu, le candidat sans filtre de régime de volatilité
   reste la référence.
@@ -190,7 +220,8 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   que le candidat déjà trouvé — non retenue, non creusée davantage.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
-sans filtre de tendance) est un candidat **provisoire**, pas une stratégie
+sans filtre de tendance, de volume ni de régime de volatilité) est un
+candidat **provisoire**, pas une stratégie
 validée pour du capital réel — l'échantillon (76-81 trades sur 3,5 ans)
 reste modeste. Il sert de référence pour la Phase 5b, remplaçable dès
 qu'une meilleure stratégie est trouvée.

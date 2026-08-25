@@ -255,3 +255,13 @@ test('decide : sans maxVolatilityRatio, le régime de volatilité est ignoré (c
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.kind, 'enter');
 });
+
+test("decide : le filtre de régime de volatilité n'affecte jamais la sortie", () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxVolatilityRatio: 0.05 });
+  const position: Position = { symbol: SYMBOL, side: 'long', quantity: 1, entryPrice: 5, entryTime: 0 };
+  // closes 5,10,10,10,20 -> sma(4 dernières)=12.5, ratio std/sma≈0.35, très
+  // au-dessus de maxVolatilityRatio=0.05 (régime que le filtre bloquerait à
+  // l'entrée) ; prix=20 >= sma -> la sortie doit quand même être émise.
+  const ctx = ctxFor([5, 10, 10, 10, 20], position);
+  assert.equal(s.decide(ctx)[0]?.kind, 'exit');
+});
