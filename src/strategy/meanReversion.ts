@@ -37,6 +37,14 @@ export interface MeanReversionParams {
    */
   readonly volumePeriod?: number;
   readonly volumeMultiplier?: number;
+  /**
+   * Seuil de coefficient de variation (std(period)/sma(period)) au-delà
+   * duquel aucune entrée n'est autorisée — filtre de régime de forte
+   * volatilité. Sans lui (défaut), aucun filtre. N'affecte jamais la
+   * sortie. Réutilise smaVal/stdVal déjà calculés pour le seuil d'entrée :
+   * pas de nouvelle fenêtre, pas de nouveau paramètre de période.
+   */
+  readonly maxVolatilityRatio?: number;
 }
 
 function sma(view: BarView, period: number): number {
@@ -64,7 +72,7 @@ function avgVolume(view: BarView, period: number): number {
 }
 
 export function createMeanReversion(params: MeanReversionParams): Strategy {
-  const { symbol, period, entryK, trendPeriod, volumePeriod, volumeMultiplier } = params;
+  const { symbol, period, entryK, trendPeriod, volumePeriod, volumeMultiplier, maxVolatilityRatio } = params;
   if (!Number.isInteger(period) || period < 2) {
     throw new RangeError(`Période invalide : ${period}`);
   }
@@ -83,6 +91,9 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
   if (volumeMultiplier !== undefined && !(volumeMultiplier > 0)) {
     throw new RangeError(`volumeMultiplier invalide : ${volumeMultiplier}`);
   }
+  if (maxVolatilityRatio !== undefined && !(maxVolatilityRatio > 0)) {
+    throw new RangeError(`maxVolatilityRatio invalide : ${maxVolatilityRatio}`);
+  }
 
   const warmup = Math.max(period, trendPeriod ?? 0, volumePeriod ?? 0);
 
@@ -95,6 +106,7 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
       ...(trendPeriod !== undefined ? { trendPeriod } : {}),
       ...(volumePeriod !== undefined ? { volumePeriod } : {}),
       ...(volumeMultiplier !== undefined ? { volumeMultiplier } : {}),
+      ...(maxVolatilityRatio !== undefined ? { maxVolatilityRatio } : {}),
     },
     decide(ctx: StrategyContext): readonly Intent[] {
       const view = ctx.views.get(symbol);
@@ -110,8 +122,9 @@ export function createMeanReversion(params: MeanReversionParams): Strategy {
         volumePeriod === undefined ||
         volumeMultiplier === undefined ||
         view.volume(0) >= volumeMultiplier * avgVolume(view, volumePeriod);
+      const volRegimeOk = maxVolatilityRatio === undefined || stdVal / smaVal <= maxVolatilityRatio;
 
-      if (!hasPosition && price < threshold && trendOk && volumeOk) {
+      if (!hasPosition && price < threshold && trendOk && volumeOk && volRegimeOk) {
         return [{
           kind: 'enter',
           symbol,

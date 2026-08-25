@@ -214,3 +214,44 @@ test('decide : sans volumePeriod/volumeMultiplier, le volume est ignoré (compor
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.kind, 'enter'); // toujours une entrée : le volume n'est pas pris en compte
 });
+
+test('createMeanReversion : lève si maxVolatilityRatio est invalide', () => {
+  assert.throws(
+    () => createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxVolatilityRatio: 0 }),
+    /maxVolatilityRatio/,
+  );
+});
+
+test('createMeanReversion : maxVolatilityRatio n\'affecte pas warmup, params exposés', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxVolatilityRatio: 0.05 });
+  assert.equal(s.warmup, 4);
+  assert.deepEqual(s.params, { period: 4, entryK: 1, maxVolatilityRatio: 0.05 });
+});
+
+test('decide : le filtre de régime de volatilité bloque une entrée en régime trop volatil', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxVolatilityRatio: 0.05 });
+  // closes 10,10,10,10 -> sma=10, std=0 (ratio=0, filtre neutre à ce point) ;
+  // une chute nette à 5 franchit le seuil d'entrée MAIS fait aussi bondir le
+  // ratio std/sma (les 5 dernières closes incluent maintenant le 5) bien
+  // au-dessus de 0.05 — le filtre doit bloquer.
+  const ctx = ctxFor([10, 10, 10, 10, 5]);
+  assert.equal(s.decide(ctx)[0]?.kind, 'hold');
+});
+
+test('decide : le filtre de régime de volatilité autorise une entrée en régime calme', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1, maxVolatilityRatio: 100 });
+  // Même repli que le test précédent, mais un seuil de ratio si large qu'il
+  // n'exclut jamais rien -> comportement identique au cas sans filtre.
+  const ctx = ctxFor([10, 10, 10, 10, 5]);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter');
+});
+
+test('decide : sans maxVolatilityRatio, le régime de volatilité est ignoré (comportement inchangé)', () => {
+  const s = createMeanReversion({ symbol: SYMBOL, period: 4, entryK: 1 });
+  const ctx = ctxFor([10, 10, 10, 10, 5]);
+  const intents = s.decide(ctx);
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0]?.kind, 'enter');
+});
