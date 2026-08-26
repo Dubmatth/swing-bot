@@ -22,6 +22,9 @@ export interface CrossSectionalMomentumParams {
 
 const WEEK_SECONDS = 7 * 24 * 3600;
 
+// epoch 0 (1970-01-01T00:00:00Z) était un jeudi : les frontières de semaine
+// détectées ici (changement de valeur de weekOf) tombent donc toutes un
+// jeudi 00:00 UTC, pas un lundi comme on pourrait le supposer par défaut.
 function weekOf(time: number): number {
   return Math.floor(time / WEEK_SECONDS);
 }
@@ -40,16 +43,15 @@ export function createCrossSectionalMomentum(params: CrossSectionalMomentumParam
     warmup: lookbackPeriod,
     params: { lookbackPeriod, topN },
     decide(ctx: StrategyContext): readonly Intent[] {
-      const symbols = [...ctx.views.keys()];
-      if (symbols.length === 0) return [{ kind: 'hold' }];
+      const entries = [...ctx.views];
+      if (entries.length === 0) return [{ kind: 'hold' }];
 
-      const firstView = ctx.views.get(symbols[0]!)!;
+      const [, firstView] = entries[0];
       const isRebalanceBar = weekOf(ctx.now) !== weekOf(firstView.time(1));
       if (!isRebalanceBar) return [{ kind: 'hold' }];
 
-      const ranked = symbols
-        .map((symbol) => {
-          const view = ctx.views.get(symbol)!;
+      const ranked = entries
+        .map(([symbol, view]) => {
           const formationReturn = view.close(0) / view.close(lookbackPeriod) - 1;
           return { symbol, formationReturn };
         })
@@ -57,7 +59,7 @@ export function createCrossSectionalMomentum(params: CrossSectionalMomentumParam
 
       const target = ranked.slice(0, topN);
       const targetSymbols = new Set(target.map((r) => r.symbol));
-      const currentlyHeld = symbols.filter((s) => ctx.positions.has(s));
+      const currentlyHeld = entries.filter(([symbol]) => ctx.positions.has(symbol)).map(([symbol]) => symbol);
 
       const intents: Intent[] = [];
       for (const symbol of currentlyHeld) {
