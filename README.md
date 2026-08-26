@@ -75,6 +75,7 @@ src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
 src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMultiplier × ATR
 src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
 src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
+src/strategy/crossSectionalMomentum.ts Momentum cross-sectionnel : classe l'univers par rendement de formation, détient le top N, rebalancement hebdomadaire
 src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
 src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades, équité (portfolioEquity)
@@ -95,6 +96,7 @@ scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la f
 scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
 scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
 scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
+scripts/tune-cross-sectional-momentum.ts Évalue le momentum cross-sectionnel par walk-forward (topN couplé à maxConcurrentPositions, grille exploratoire lookbackPeriod)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 ```
 
@@ -261,6 +263,27 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   temps de 75 à 110 barres hors échantillon. Non retenu — comme tout
   résultat non concluant, il ne devient pas un candidat adopté — le
   candidat sans stop de temps reste la référence.
+
+- **Momentum cross-sectionnel** (`src/strategy/crossSectionalMomentum.ts`,
+  Phase 9) : contrairement au spike jetable ci-dessus, cette fois formalisé
+  en code de production (rebalancement hebdomadaire pur, sans hystérésis,
+  ordre exits-avant-enters) et évalué par walk-forward avec une vraie
+  sélection de grille — 3 valeurs de `topN` ∈ {3, 5, 7}, chacune couplée à
+  `maxConcurrentPositions` (un appel `runWalkForward` séparé par `topN`),
+  contre une grille exploratoire `lookbackPeriod` ∈ {42, 84, 168} (chiffres
+  imprimés par `scripts/tune-cross-sectional-momentum.ts`) : signature de
+  sur-optimisation nette, plus marquée encore que le suivi de tendance en
+  ouverture de cette section — rendement in-sample moyen +38,62 % à
+  +52,83 % selon `topN`, rendement hors échantillon moyen **négatif** dans
+  les trois cas : `topN=3` → -1,40 % (6/37 fenêtres gagnantes, meilleur/pire
+  fold +9,29 % / -21,31 %) ; `topN=5` → -1,88 % (7/37, +47,27 % / -18,45 %) ;
+  `topN=7` → -1,52 % (5/37, +45,02 % / -23,29 %). Le `lookbackPeriod`
+  sélectionné par fold n'est pas stable d'un `topN` à l'autre : `168`
+  domine pour `topN=3` (27/37 folds) et `topN=7` (23/37), `84` pour
+  `topN=5` (18/37) — la sélection walk-forward suit le bruit in-sample
+  (jusqu'à +305 % sur un seul fold) plutôt qu'un signal réel. Aucune
+  combinaison `(topN, lookbackPeriod)` ne démontre d'edge hors échantillon.
+  Famille non retenue.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un
