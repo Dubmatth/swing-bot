@@ -163,3 +163,24 @@ test('decide : pas de sortie si close supérieur au plus-bas du canal', () => {
   const bars = [...EXIT_CHANNEL_BARS, { high: 9.5, low: 9.0, close: 9.2 }];
   assert.equal(s.decide(ctxFor(bars, HELD_POSITION))[0]?.kind, 'hold');
 });
+
+test('decide : pas de sortie forcée sans position ouverte, même en cas de cassure baissière', () => {
+  const s = createDonchianBreakout({ symbol: SYMBOL, entryPeriod: 3, exitPeriod: 2 });
+  // Une bougie supplémentaire précède EXIT_CHANNEL_BARS pour satisfaire
+  // l'historique requis par le canal d'entrée (entryPeriod=3, ago=1,2,3) ;
+  // elle ne change pas le canal de sortie (exitPeriod=2, ago=1,2
+  // uniquement, toujours EXIT_CHANNEL_BARS). Même bougie finale que le test
+  // "cassure baissière (close < plus-bas du canal) avec position -> exit"
+  // ci-dessus (close=8.0 < plus-bas(2)=8.5, déclencherait une sortie si une
+  // position était ouverte), mais ici sans position : la branche de sortie
+  // ne doit jamais s'exécuter sans position. Le canal d'entrée (plus-haut
+  // des 3 bougies précédentes = max(10.0, 10.0, 10.0) = 10.0) n'est pas non
+  // plus cassé (close=8.0 < 10.0) -> hold, par construction et non par
+  // accident.
+  const bars = [
+    { high: 10.0, low: 9.0, close: 9.5 },
+    ...EXIT_CHANNEL_BARS,
+    { high: 8.5, low: 7.5, close: 8.0 },
+  ];
+  assert.equal(s.decide(ctxFor(bars))[0]?.kind, 'hold');
+});

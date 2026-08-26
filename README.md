@@ -228,31 +228,44 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   cross-sectionnel — grille exploratoire alignée `(entryPeriod, exitPeriod)`
   ∈ {(30,10), (60,20), (120,40)} (ratio ~3:1, convention Turtle), calibrée
   directement en bougies 4h, sur les 20 paires réelles
-  (`scripts/tune-donchian-breakout.ts`). **Signature de sur-optimisation
-  nette** : rendement in-sample moyen +27,50 %, rendement hors échantillon
-  moyen +2,70 % (11/37 fenêtres gagnantes, meilleur/pire fold +136,12 % /
-  -16,57 %) — un écart d'environ 25 points entre in-sample et
-  hors-échantillon, du même ordre que le suivi de tendance. Ce +2,70 %
-  moyen hors échantillon n'est en outre pas représentatif de l'ensemble :
-  il est presque entièrement porté par un seul fold hors norme (+136,12 %,
-  fold 23, combinaison entryPeriod=60/exitPeriod=20) ; en l'excluant, la
-  moyenne hors échantillon des 36 fenêtres restantes devient **négative**
-  (-1,01 %). Détail par combinaison sélectionnée : entryPeriod=120/
-  exitPeriod=40 (17/37 folds, la plus souvent retenue) → -1,31 % en
-  moyenne (3/17 gagnants) ; entryPeriod=60/exitPeriod=20 (12/37 folds) →
-  +12,66 % en moyenne (6/12 gagnants, entièrement porté par l'outlier
-  ci-dessus) ; entryPeriod=30/exitPeriod=10 (8/37 folds) → -3,72 % en
-  moyenne (2/8 gagnants). Aucune des trois combinaisons ne montre un edge
-  robuste après frais. Vérification anti-dilution (leçon explicite de la
-  revue finale de la Phase 9, où `lookbackPeriod=168` ne laissait que 11
-  barres de décision par fenêtre de test et faisait tomber la plupart des
-  folds à zéro trade) : avec la grille de cette phase (`entryPeriod` max =
-  120), la fenêtre de test la plus contraignante compte
-  180 - 120 - 1 = 59 barres de décision, très supérieur au cas dégénéré de
-  la Phase 9 — le résultat mesuré ici n'est donc pas un artefact de fenêtre
-  de test trop courte. Non retenu : troisième famille directionnelle à
-  échouer, avec la même signature de sur-optimisation que le suivi de
-  tendance et le même verdict de non-edge que le momentum cross-sectionnel.
+  (`scripts/tune-donchian-breakout.ts`, chiffres imprimés par ce script).
+  **Signature de sur-optimisation nette** : rendement in-sample moyen
+  +27,50 %, rendement hors échantillon moyen +2,70 % (11/37 fenêtres
+  gagnantes, meilleur/pire fold +136,12 % / -16,57 %) — un écart d'environ
+  25 points entre in-sample et hors-échantillon, du même ordre que le suivi
+  de tendance. Ce +2,70 % moyen hors échantillon n'est en outre pas
+  représentatif de l'ensemble : il est presque entièrement porté par un
+  seul fold hors norme (+136,12 %, fold 23, combinaison
+  entryPeriod=60/exitPeriod=20) ; en l'excluant, la moyenne hors
+  échantillon des 36 fenêtres restantes devient **négative** (-1,01 %).
+  Détail par combinaison sélectionnée : entryPeriod=120/exitPeriod=40
+  (17/37 folds, la plus souvent retenue) → -1,31 % en moyenne
+  (3/17 gagnants) ; entryPeriod=60/exitPeriod=20 (12/37 folds) → +12,66 %
+  en moyenne (6/12 gagnants, porté à environ 90 % par l'outlier ci-dessus —
+  hors ce fold, la moyenne du groupe reste légèrement positive, +1,44 % sur
+  les 11 fenêtres restantes) ; entryPeriod=30/exitPeriod=10 (8/37 folds) →
+  -3,72 % en moyenne (2/8 gagnants). Aucune des trois combinaisons ne
+  montre un edge robuste après frais. Vérification anti-dilution (leçon
+  explicite de la revue finale de la Phase 9, où `lookbackPeriod=168` ne
+  laissait que 11 barres de décision par fenêtre de test et faisait tomber
+  la plupart des folds à zéro trade) : avec la grille de cette phase
+  (`entryPeriod` max = 120), la fenêtre de test la plus contraignante
+  compte 180 - 120 - 1 = 59 barres de décision, très supérieur au cas
+  dégénéré de la Phase 9. Ce calcul de barres ne suffit cependant pas à lui
+  seul à garantir qu'un fold a réellement tradé : le script rejoue chaque
+  fenêtre de test et vérifie si sa courbe d'équité est restée strictement
+  plate (aucun trade exécuté) — 4/37 fenêtres le sont, et exactement les
+  quatre folds à rendement nul repérés dans le détail par fold (folds 20,
+  33, 34, 36, tous entryPeriod=120/exitPeriod=40, soit 4 des 17 folds de ce
+  groupe). Le rendement moyen quasi nul de ce groupe (-1,31 %) n'est donc
+  pas un artefact de mesure caché par la fenêtre de test — il combine des
+  folds qui ont réellement tradé sans edge et des folds qui n'ont
+  simplement pas tradé, ce qui renforce plutôt qu'il n'affaiblit la
+  conclusion « non retenu » : les moyennes rapportées ici ne sont pas
+  diluées par le mécanisme non mesurable qui affectait la Phase 9. Non
+  retenu : troisième famille directionnelle à échouer, avec la même
+  signature de sur-optimisation que le suivi de tendance et le même
+  verdict de non-edge que le momentum cross-sectionnel.
 
 - **Stop de temps** (sortie forcée après `maxHoldBars` barres si le retour
   à la moyenne ne s'est pas encore produit — `maxHoldBars` sur
