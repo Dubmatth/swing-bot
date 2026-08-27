@@ -40,7 +40,6 @@ interface EnterCandidate {
   readonly symbol: string;
   readonly zScore: number;
   readonly price: number;
-  readonly smaVal: number;
   readonly threshold: number;
 }
 
@@ -84,7 +83,6 @@ export function createCrossSectionalMeanReversion(params: CrossSectionalMeanReve
             symbol,
             zScore: (smaVal - price) / stdVal,
             price,
-            smaVal,
             threshold,
           });
         }

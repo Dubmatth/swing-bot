@@ -271,13 +271,15 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   walk-forward et par un diagnostic de saturation du plafond de positions
   (`scripts/tune-cross-sectional-mean-reversion.ts`), aux deux réglages
   `period=70/80, entryK=4`.
-  **D'abord le diagnostic de saturation**, car le réordonnancement ne peut
-  avoir d'effet que si `maxConcurrentPositions=5` est effectivement atteint
-  pendant que plusieurs paires sont éligibles simultanément : sur le
-  backtest complet (hors walk-forward), la référence subit 85 rejets pour
-  cause de plafond sur 162 trades exécutés à `period=70` (81 rejets sur 152
-  trades à `period=80`), la variante cross-sectionnelle 74 rejets sur 162
-  trades exécutés à `period=70` (72 rejets sur 150 trades à `period=80`) —
+  **D'abord le diagnostic de saturation**, car la variante ne peut avoir d'effet
+  que si `maxConcurrentPositions=5` est effectivement atteint pendant que
+  plusieurs paires sont éligibles simultanément — elle diffère de la référence
+  sur deux axes (priorité par z-score **et** ordre sorties-avant-entrées) :
+  sur le backtest complet (hors walk-forward), la référence subit 85 rejets
+  pour cause de plafond sur 162 fills (81 allers-retours) à `period=70`
+  (81 rejets sur 152 fills — 76 allers-retours — à `period=80`), la variante
+  cross-sectionnelle 74 rejets sur 162 fills (81 allers-retours) à `period=70`
+  (72 rejets sur 150 fills — 75 allers-retours — à `period=80`) —
   dans les deux cas la totalité des rejets enregistrés sont dus au plafond,
   aucune autre cause de rejet. Le plafond est donc réellement saturé, pas
   marginalement : contrairement au filtre de régime de volatilité (Phase 7,
