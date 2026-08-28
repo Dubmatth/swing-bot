@@ -76,6 +76,7 @@ src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMult
 src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
 src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
 src/strategy/crossSectionalMomentum.ts Momentum cross-sectionnel : classe l'univers par rendement de formation, détient le top N, rebalancement hebdomadaire
+src/strategy/donchianBreakout.ts Breakout Donchian/Turtle : cassure du plus haut (entrée) ou du plus bas (sortie) sur une fenêtre glissante, canal exclut toujours la barre courante
 src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
 src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades, équité (portfolioEquity)
@@ -98,6 +99,7 @@ scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de vol
 scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
 scripts/tune-cross-sectional-momentum.ts Évalue le momentum cross-sectionnel par walk-forward (topN couplé à maxConcurrentPositions, grille exploratoire lookbackPeriod)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
+scripts/tune-donchian-breakout.ts Évalue le breakout Donchian/Turtle par walk-forward (grille calibrée en bougies 4h, 3 combinaisons entryPeriod/exitPeriod alignées)
 ```
 
 ## Recherche de stratégie (données réelles)
@@ -221,6 +223,51 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   le churn), quasi neutre hors échantillon (-0,28 %) mais avec un écart
   in/hors-échantillon plus marqué que mean-reversion. Ni pire ni meilleur
   que le candidat déjà trouvé — non retenue, non creusée davantage.
+- **Breakout Donchian/Turtle** (`donchian-breakout`, cassure du plus haut
+  (entrée) ou du plus bas (sortie) sur une fenêtre glissante,
+  `src/strategy/donchianBreakout.ts`) : troisième famille directionnelle
+  testée par walk-forward, indépendante du suivi de tendance et du momentum
+  cross-sectionnel — grille exploratoire alignée `(entryPeriod, exitPeriod)`
+  ∈ {(30,10), (60,20), (120,40)} (ratio ~3:1, convention Turtle), calibrée
+  directement en bougies 4h, sur les 20 paires réelles
+  (`scripts/tune-donchian-breakout.ts`, chiffres imprimés par ce script).
+  **Signature de sur-optimisation nette** : rendement in-sample moyen
+  +27,50 %, rendement hors échantillon moyen +2,70 % (11/37 fenêtres
+  gagnantes, meilleur/pire fold +136,12 % / -16,57 %) — un écart d'environ
+  25 points entre in-sample et hors-échantillon, du même ordre que le suivi
+  de tendance. Ce +2,70 % moyen hors échantillon n'est en outre pas
+  représentatif de l'ensemble : il est presque entièrement porté par un
+  seul fold hors norme (+136,12 %, fold 23, combinaison
+  entryPeriod=60/exitPeriod=20) ; en l'excluant, la moyenne hors
+  échantillon des 36 fenêtres restantes devient **négative** (-1,01 %).
+  Détail par combinaison sélectionnée : entryPeriod=120/exitPeriod=40
+  (17/37 folds, la plus souvent retenue) → -1,31 % en moyenne
+  (3/17 gagnants) ; entryPeriod=60/exitPeriod=20 (12/37 folds) → +12,66 %
+  en moyenne (6/12 gagnants, porté à environ 90 % par l'outlier ci-dessus —
+  hors ce fold, la moyenne du groupe reste légèrement positive, +1,44 % sur
+  les 11 fenêtres restantes) ; entryPeriod=30/exitPeriod=10 (8/37 folds) →
+  -3,72 % en moyenne (2/8 gagnants). Aucune des trois combinaisons ne
+  montre un edge robuste après frais. Vérification anti-dilution (leçon
+  explicite de la revue finale de la Phase 9, où `lookbackPeriod=168` ne
+  laissait que 11 barres de décision par fenêtre de test et faisait tomber
+  la plupart des folds à zéro trade) : avec la grille de cette phase
+  (`entryPeriod` max = 120), la fenêtre de test la plus contraignante
+  compte 180 - 120 - 1 = 59 barres de décision, très supérieur au cas
+  dégénéré de la Phase 9. Ce calcul de barres ne suffit cependant pas à lui
+  seul à garantir qu'un fold a réellement tradé : le script rejoue chaque
+  fenêtre de test et vérifie si sa courbe d'équité est restée strictement
+  plate (aucun trade exécuté) — 4/37 fenêtres le sont, et exactement les
+  quatre folds à rendement nul repérés dans le détail par fold (folds 20,
+  33, 34, 36, tous entryPeriod=120/exitPeriod=40, soit 4 des 17 folds de ce
+  groupe). Le rendement moyen quasi nul de ce groupe (-1,31 %) n'est donc
+  pas un artefact de mesure caché par la fenêtre de test — il combine des
+  folds qui ont réellement tradé sans edge et des folds qui n'ont
+  simplement pas tradé, ce qui renforce plutôt qu'il n'affaiblit la
+  conclusion « non retenu » : les moyennes rapportées ici ne sont pas
+  diluées par le mécanisme non mesurable qui affectait la Phase 9. Non
+  retenu : troisième famille directionnelle à échouer, avec la même
+  signature de sur-optimisation que le suivi de tendance et le même
+  verdict de non-edge que le momentum cross-sectionnel.
 
 - **Stop de temps** (sortie forcée après `maxHoldBars` barres si le retour
   à la moyenne ne s'est pas encore produit — `maxHoldBars` sur
