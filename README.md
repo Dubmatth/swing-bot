@@ -74,6 +74,7 @@ src/strategy/indicators.ts EMA, SMA, ATR, RollingStd — O(1) par barre
 src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
 src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMultiplier × ATR
 src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
+src/strategy/crossSectionalMeanReversion.ts Variante cross-sectionnelle de mean-reversion : priorise les entrées simultanées par profondeur de survente (z-score), même signal que meanReversion.ts
 src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
 src/strategy/crossSectionalMomentum.ts Momentum cross-sectionnel : classe l'univers par rendement de formation, détient le top N, rebalancement hebdomadaire
 src/strategy/donchianBreakout.ts Breakout Donchian/Turtle : cassure du plus haut (entrée) ou du plus bas (sortie) sur une fenêtre glissante, canal exclut toujours la barre courante
@@ -100,6 +101,7 @@ scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore me
 scripts/tune-cross-sectional-momentum.ts Évalue le momentum cross-sectionnel par walk-forward (topN couplé à maxConcurrentPositions, grille exploratoire lookbackPeriod)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 scripts/tune-donchian-breakout.ts Évalue le breakout Donchian/Turtle par walk-forward (grille calibrée en bougies 4h, 3 combinaisons entryPeriod/exitPeriod alignées)
+scripts/tune-cross-sectional-mean-reversion.ts Compare mean-reversion (référence combineStrategies) à sa variante cross-sectionnelle par walk-forward et par diagnostic de saturation du plafond de positions
 ```
 
 ## Recherche de stratégie (données réelles)
@@ -383,6 +385,43 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   compter) ; pour `topN=5`, `lookbackPeriod=84` fournit à lui seul un
   résultat négatif réellement mesuré sur 18 folds sur 37. Famille non
   retenue.
+
+- **Mean-reversion cross-sectionnelle** (priorise les entrées simultanées
+  par profondeur de survente — z-score décroissant — plutôt que l'ordre
+  arbitraire de `combineStrategies` ; même signal d'entrée/sortie que le
+  candidat déjà validé, **0 degré de liberté ajouté**) : testée par
+  walk-forward et par un diagnostic de saturation du plafond de positions
+  (`scripts/tune-cross-sectional-mean-reversion.ts`), aux deux réglages
+  `period=70/80, entryK=4`.
+  **D'abord le diagnostic de saturation**, car la variante ne peut avoir d'effet
+  que si `maxConcurrentPositions=5` est effectivement atteint pendant que
+  plusieurs paires sont éligibles simultanément — elle diffère de la référence
+  sur deux axes (priorité par z-score **et** ordre sorties-avant-entrées) :
+  sur le backtest complet (hors walk-forward), la référence subit 85 rejets
+  pour cause de plafond sur 162 fills (81 allers-retours) à `period=70`
+  (81 rejets sur 152 fills — 76 allers-retours — à `period=80`), la variante
+  cross-sectionnelle 74 rejets sur 162 fills (81 allers-retours) à `period=70`
+  (72 rejets sur 150 fills — 75 allers-retours — à `period=80`) —
+  dans les deux cas la totalité des rejets enregistrés sont dus au plafond,
+  aucune autre cause de rejet. Le plafond est donc réellement saturé, pas
+  marginalement : contrairement au filtre de régime de volatilité (Phase 7,
+  seuil hors d'atteinte) ou au stop de temps (Phase 8, fenêtre de test trop
+  courte), le mécanisme testé ici a effectivement eu l'occasion de jouer —
+  un résultat neutre ne serait donc pas ici une question de mécanisme
+  structurellement inopérant.
+  **Résultat walk-forward** (37 fenêtres de test) : à `period=70`,
+  cross-sectionnelle +0,72 % (12/37 fenêtres gagnantes) contre référence
+  +0,67 % (12/37) — écart de +0,05 point ; à `period=80`, cross-sectionnelle
+  +0,72 % (13/37) contre référence +0,71 % (13/37) — écart de +0,01 point.
+  Le taux de fenêtres gagnantes est strictement identique aux deux réglages
+  et les écarts de rendement moyen sont du même ordre de grandeur que le
+  bruit déjà observé sur cette famille de stratégie (ex. filtre de volume,
+  Phase 6, ±0,01-0,02pp) : ce n'est pas une amélioration claire, seulement
+  marginale. Le résultat est donc **neutre** — le plafond était bien
+  saturé, ce n'est pas un cas « non concluant » faute d'occasion de jouer —
+  et n'est pas retenu comme amélioration : le candidat reste
+  `mean-reversion` assemblé via `combineStrategies`, le **Statut**
+  ci-dessous inchangé.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un
