@@ -75,6 +75,7 @@ src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
 src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMultiplier × ATR
 src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
 src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
+src/strategy/crossSectionalMomentum.ts Momentum cross-sectionnel : classe l'univers par rendement de formation, détient le top N, rebalancement hebdomadaire
 src/strategy/donchianBreakout.ts Breakout Donchian/Turtle : cassure du plus haut (entrée) ou du plus bas (sortie) sur une fenêtre glissante, canal exclut toujours la barre courante
 src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
 src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
@@ -96,6 +97,7 @@ scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la f
 scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
 scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
 scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
+scripts/tune-cross-sectional-momentum.ts Évalue le momentum cross-sectionnel par walk-forward (topN couplé à maxConcurrentPositions, grille exploratoire lookbackPeriod)
 scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
 scripts/tune-donchian-breakout.ts Évalue le breakout Donchian/Turtle par walk-forward (grille calibrée en bougies 4h, 3 combinaisons entryPeriod/exitPeriod alignées)
 ```
@@ -308,6 +310,79 @@ univers. Résumé honnête, dans l'ordre où elles ont été essayées :
   temps de 75 à 110 barres hors échantillon. Non retenu — comme tout
   résultat non concluant, il ne devient pas un candidat adopté — le
   candidat sans stop de temps reste la référence.
+
+- **Momentum cross-sectionnel** (`src/strategy/crossSectionalMomentum.ts`,
+  Phase 9) : contrairement au spike jetable ci-dessus, cette fois formalisé
+  en code de production (rebalancement hebdomadaire pur, sans hystérésis,
+  ordre exits-avant-enters) et évalué par walk-forward avec une vraie
+  sélection de grille — 3 valeurs de `topN` ∈ {3, 5, 7}, chacune couplée à
+  `maxConcurrentPositions` (un appel `runWalkForward` séparé par `topN`),
+  contre une grille exploratoire `lookbackPeriod` ∈ {42, 84, 168} (chiffres
+  imprimés par `scripts/tune-cross-sectional-momentum.ts`) : rendement
+  in-sample moyen +38,62 % à +52,83 % selon `topN`, rendement hors
+  échantillon moyen **négatif** dans les trois cas : `topN=3` → -1,40 %
+  (6/37 fenêtres gagnantes, meilleur/pire fold +9,29 % / -21,31 %) ;
+  `topN=5` → -1,88 % (7/37, +47,27 % / -18,45 %) ; `topN=7` → -1,52 % (5/37,
+  +45,02 % / -23,29 %). L'écart in-sample/hors-échantillon est plus marqué
+  que celui du suivi de tendance en ouverture de cette section — mais le
+  rendement hors échantillon lui-même y est *moins* négatif (-1,4 à -1,9 %
+  ici contre -3 à -4 % pour le suivi de tendance), c'est-à-dire moins
+  mauvais sur la métrique qui décide effectivement de l'adoption ; l'écart
+  in/hors-échantillon plus marqué ne doit donc pas être lu comme un
+  résultat pire — voir aussi plus bas pourquoi cet écart est lui-même
+  partiellement gonflé par un déficit de mesure. Le `lookbackPeriod`
+  sélectionné par fold n'est pas stable d'un `topN` à l'autre : `168`
+  domine pour `topN=3` (27/37 folds) et `topN=7` (23/37), `84` pour
+  `topN=5` (18/37) — la sélection walk-forward suit le bruit in-sample
+  (jusqu'à +305 % sur un seul fold) plutôt qu'un signal réel.
+
+  **Déficit de mesure sur `lookbackPeriod=168`** (même famille de piège que
+  les Phases 7 et 8, révélé par la revue finale de branche, et non par un
+  nouveau run visant à inverser la conclusion) : `warmup = lookbackPeriod`
+  (`src/strategy/crossSectionalMomentum.ts`) et `runBacktest`
+  (`src/backtest/runner.ts`) n'itère les barres de décision que de `warmup`
+  à `length-2` — dans une fenêtre de test isolée de `TEST_BARS=180` barres,
+  `lookbackPeriod=168` ne laisse que 11 barres de décision (168 à 178) face
+  à une frontière de rebalancement hebdomadaire qui ne revient que tous les
+  42 barres : au plus une frontière peut y tomber, souvent aucune.
+  `scripts/tune-cross-sectional-momentum.ts` compte désormais, pour chaque
+  `lookbackPeriod`, combien des 37 fenêtres de test walk-forward n'ont vu
+  absolument aucun rebalancement (courbe d'équité rigoureusement plate à
+  `initialCash`, rendement hors échantillon exactement 0,00 % par
+  construction) : `lookbackPeriod=42` → 0/37, `lookbackPeriod=84` → 0/37,
+  `lookbackPeriod=168` → **27/37**, et ce quel que soit `topN` (la frontière
+  de rebalancement ne dépend que du temps, pas de `topN` — vérifié
+  empiriquement identique sur les trois valeurs). Comme `168` est le
+  réglage sélectionné par walk-forward dans la majorité des folds pour
+  `topN=3` (27/37) et `topN=7` (23/37), la plupart des rendements hors
+  échantillon qui composent ces deux moyennes ne sont pas des pertes
+  mesurées mais des non-mesures diluées vers 0 % : sur les 27 folds où
+  `topN=3` sélectionne `168`, 20 sont de tels folds vides et seulement 7 ont
+  effectivement tradé (moyenne hors échantillon sur ces 7 folds : **+1,79 %**) ;
+  pour `topN=7`, 18 des 23 folds sélectionnant `168` sont vides, 5 ont tradé
+  (moyenne **+0,95 %**). Autrement dit, la partie de `lookbackPeriod=168`
+  réellement mesurée n'est pas pire que la moyenne globale de son `topN` —
+  elle est même légèrement positive, mais sur un échantillon bien trop
+  petit (5 à 7 folds) pour en tirer une conclusion. Le résultat négatif de
+  `topN=3` et `topN=7` vient donc surtout des folds restants, où
+  `lookbackPeriod` vaut 42 ou 84 et où le rendement est réellement mesuré
+  (10 folds pour `topN=3` : 5 à `42` moyenne -10,00 %, 5 à `84` moyenne
+  -2,85 % ; 14 folds pour `topN=7` : 5 à `42` moyenne +5,67 %, 9 à `84`
+  moyenne -9,93 %). `topN=5` échappe en grande partie à ce déficit :
+  walk-forward y sélectionne surtout `lookbackPeriod=84` (18/37 folds,
+  jamais vide, rendement hors échantillon moyen **-5,81 %**, pleinement
+  mesuré) ; `168` n'y est sélectionné que 15/37 fois, dont 11 vides et
+  seulement 4 tradés (moyenne +3,97 %, échantillon minuscule).
+  La conclusion « famille non retenue » reste correcte — aucune combinaison
+  `(topN, lookbackPeriod)`, mesurée ou diluée, ne démontre d'edge hors
+  échantillon — mais le diagnostic sous-jacent diffère selon `topN` : pour
+  `topN=3` et `topN=7`, l'essentiel de la moyenne négative reportée
+  provient de la sélection walk-forward tombant sur `lookbackPeriod=42` ou
+  `84` dans une minorité de folds, pas d'un `168` démontré perdant (sa
+  portion mesurée est même légèrement positive, sur trop peu de folds pour
+  compter) ; pour `topN=5`, `lookbackPeriod=84` fournit à lui seul un
+  résultat négatif réellement mesuré sur 18 folds sur 37. Famille non
+  retenue.
 
 **Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
 sans filtre de tendance, de volume ni de régime de volatilité) est un
