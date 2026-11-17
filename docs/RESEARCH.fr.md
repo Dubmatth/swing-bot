@@ -1,0 +1,513 @@
+# swing-bot — Phase 5b
+
+Bot de trading swing sur Kraken. La couche de données (Phase 0), le moteur de
+backtest event-driven avec frais/slippage (Phase 1), le backtest
+multi-paires avec allocation de capital (Phase 2), le sizing par risque ATR
+(Phase 3), la validation walk-forward (Phase 4), le pipeline de données live
+(Phase 5a) et le runner de trading papier (Phase 5b) sont en place. Une
+première recherche de stratégie sur données réelles (voir « Recherche de
+stratégie » ci-dessous) a produit un candidat provisoire, pas encore une
+stratégie validée pour du capital réel.
+
+## Démarrage
+
+```bash
+npm i -D typescript @types/node
+npm run typecheck
+npm test          # 171 tests
+```
+
+Node 22.6+ requis (type-stripping natif, pas de build step).
+
+## Données
+
+Les CSV OHLCVT ne sont pas versionnés (`data/` ignoré par git). Deux sources
+possibles :
+- L'archive « Downloadable historical OHLCVT data » du support Kraken, si
+  elle contient déjà des bougies pré-agrégées `_240.csv`.
+- L'archive « Time & Sales » (transactions brutes, `timestamp,price,volume`,
+  un fichier par paire, ex. `XBTEUR.csv`) — c'est le format que Kraken fournit
+  actuellement. La convertir en bougies avec :
+  ```bash
+  npm run convert-trades   # lit ~/Downloads/TimeAndSales_Combined, écrit data/kraken-ohlcvt/
+  ```
+  `scripts/convert-trades.ts` agrège les transactions en OHLCV (60/240/1440
+  min) via `src/data/aggregateTrades.ts`, dans le format déjà attendu par
+  `krakenCsv.ts` — aucun changement au chargeur.
+
+L'endpoint REST `/0/public/OHLC` ne renvoie que 720 points : il sert à
+l'amorçage temps réel, jamais à constituer l'historique.
+
+```ts
+const { series, reports, commonStart } = await loadUniverse(UNIVERSE_SYMBOLS, {
+  dir: 'data/kraken-ohlcvt',
+  interval: 240,
+});
+```
+
+## Ce que le code garantit
+
+| Invariant | Mécanisme | Test |
+|---|---|---|
+| Pas de look-ahead | `BarView` bornée à la barre close ; décalage négatif → exception | `BarView : lire une barre future lève` |
+| Pas de swap crypto/crypto | `assertEurQuoted` au chargement de l'univers | `une paire crypto/crypto est rejetée` |
+| Politique de trous unique | Module `gaps.ts` importé par backtest **et** live | `fillGaps : insère et marque` |
+| Pas d'exécution sur barre fantôme | Marqueur `synthetic` par barre | `fillGaps : politique stricte` |
+| Fichier corrompu détecté | Validation OHLC ligne à ligne | `un OHLC incohérent fait échouer` |
+| Délistage détecté | `validateUniverse` contre `/0/public/AssetPairs` | `un symbole délisté fait échouer` |
+| Alignement cross-sectionnel | `loadUniverse` réduit à l'intersection temporelle | — |
+| Capital jamais dépassé | Plafond `maxConcurrentPositions` + budget `min(cash, équité/N)` | `Phase 2 — critère de sortie : le multi-paires ne dépasse jamais le capital disponible` |
+| Plafond fraction fixe jamais dépassé, même avec sizing par risque | Budget par risque plafonné par `Math.min` contre le budget fraction fixe | `Phase 3 — critère de sortie : le sizing par risque normalise l'exposition entre paires de volatilité différente` |
+| Le walk-forward révèle l'overfitting plutôt que de le masquer | Sélection des paramètres bornée à la fenêtre d'entraînement, mesure sur la fenêtre suivante non vue | `Phase 4 — critère de sortie : le walk-forward révèle l'overfitting plutôt que de le masquer` |
+| Une coupure réseau ne fait jamais planter le pipeline live | Reconnexion avec backoff exponentiel, jamais de `throw` depuis les handlers WebSocket | `test/krakenOhlcSource.test.ts` |
+
+## Structure
+
+```
+src/config/universe.ts    20 paires EUR + garde-fous
+src/data/series.ts        Colonnes Float64Array, slice, recherche binaire
+src/data/gaps.ts          Politique de trous (point de vérité unique)
+src/data/krakenCsv.ts     Parseur strict + chargement d'univers aligné (bougies OHLCVT)
+src/data/aggregateTrades.ts Agrège des transactions brutes ("Time & Sales") en bougies OHLCVT
+src/strategy/types.ts     BarView, Strategy, Intent
+src/strategy/indicators.ts EMA, SMA, ATR, RollingStd — O(1) par barre
+src/strategy/maCrossover.ts Stratégie de référence : croisement de deux SMA
+src/strategy/atrRiskCrossover.ts Croisement de deux SMA + stopDistance = atrMultiplier × ATR
+src/strategy/meanReversion.ts Réversion à la moyenne (bandes de Bollinger) + filtre de tendance optionnel + filtre de volume optionnel
+src/strategy/crossSectionalMeanReversion.ts Variante cross-sectionnelle de mean-reversion : priorise les entrées simultanées par profondeur de survente (z-score), même signal que meanReversion.ts
+src/strategy/combineStrategies.ts Assemble plusieurs stratégies mono-pair en une stratégie multi-paires
+src/strategy/crossSectionalMomentum.ts Momentum cross-sectionnel : classe l'univers par rendement de formation, détient le top N, rebalancement hebdomadaire
+src/strategy/donchianBreakout.ts Breakout Donchian/Turtle : cassure du plus haut (entrée) ou du plus bas (sortie) sur une fenêtre glissante, canal exclut toujours la barre courante
+src/backtest/events.ts    Événements typés de la file (bar-closed → order-*)
+src/backtest/execution.ts Exécution simulée : frais, slippage, quantité/prix de fill
+src/backtest/portfolio.ts Portefeuille — cash, positions, journal de trades, équité (portfolioEquity)
+src/backtest/runner.ts    Runner event-driven multi-paires : rejoue les séries barre par barre, alloue le capital sous plafond de positions
+src/backtest/metrics.ts   Métriques de performance depuis la courbe d'équité (rendement total)
+src/backtest/walkForward.ts Validation walk-forward : recherche de grille sur fenêtre d'entraînement, mesure hors échantillon sur la fenêtre suivante
+src/live/liveBarSource.ts Interface LiveBarSource + ClosedBar (injectable, testable sans réseau)
+src/live/liveSeriesBuilder.ts Construit une BarSeries croissante à partir de barres closes reçues au fil de l'eau
+src/live/krakenOhlcSource.ts Client WebSocket Kraken (canal OHLC v2) : détection de clôture pure + câblage réseau
+src/live/krakenAssetPairs.ts Résout wsname/altname contre /0/public/AssetPairs, traduit le wsname (WS v1) en symbole WS v2
+src/live/krakenRestSeed.ts Amorce liveSeriesBuilder via /0/public/OHLC (bougies déjà closes uniquement, filtrées sur result.last)
+src/live/statePersistence.ts Persistance du portefeuille (snapshot JSON, écriture atomique) et journal de trades JSONL append-only
+src/live/paperRunner.ts Boucle de décision réactive du runner papier : fill immédiat au prix de la bougie qui vient de clôturer
+scripts/run-paper.ts Point d'entrée du runner de trading papier (npm run run-paper)
+scripts/convert-trades.ts Convertit les CSV "Time & Sales" en bougies OHLCVT (voir « Données »)
+scripts/run-walkforward.ts Compare plusieurs stratégies par walk-forward sur les 20 paires réelles
+scripts/tune-mean-reversion.ts Explore la sensibilité de mean-reversion à la fréquence de trading
+scripts/tune-mean-reversion-volume.ts Évalue si un filtre de volume améliore mean-reversion (grille étroite, 0 degré de liberté)
+scripts/tune-mean-reversion-volatility.ts Évalue si un filtre de régime de volatilité améliore mean-reversion (grille étroite calibrée sur les données, 0 degré de liberté)
+scripts/tune-mean-reversion-timestop.ts Évalue si un stop de temps améliore mean-reversion (grille calibrée sur la durée de détention réelle, compte les sorties par catégorie, 0 degré de liberté)
+scripts/tune-cross-sectional-momentum.ts Évalue le momentum cross-sectionnel par walk-forward (topN couplé à maxConcurrentPositions, grille exploratoire lookbackPeriod)
+scripts/map-mean-reversion.ts Cartographie period/entryK sur la période complète (0 sélection walk-forward)
+scripts/tune-donchian-breakout.ts Évalue le breakout Donchian/Turtle par walk-forward (grille calibrée en bougies 4h, 3 combinaisons entryPeriod/exitPeriod alignées)
+scripts/tune-cross-sectional-mean-reversion.ts Compare mean-reversion (référence combineStrategies) à sa variante cross-sectionnelle par walk-forward et par diagnostic de saturation du plafond de positions
+```
+
+## Recherche de stratégie (données réelles)
+
+Une fois le pipeline de données réelles débloqué (20 paires, juin 2022 →
+décembre 2025, `scripts/convert-trades.ts` + `scripts/run-walkforward.ts`),
+plusieurs familles de stratégies ont été testées par walk-forward sur cet
+univers. Résumé honnête, dans l'ordre où elles ont été essayées :
+
+- **Suivi de tendance** (`ma-crossover`, `atr-risk-crossover`, grilles
+  élargies à 54+ combinaisons) : signature de sur-optimisation nette dans
+  les deux cas — rendement in-sample moyen +23 à +31 %, rendement hors
+  échantillon moyen **négatif** (-3 à -4 %). Aucun edge démontré après frais.
+- **Réversion à la moyenne** (`mean-reversion`, bandes de Bollinger) :
+  aux réglages initiaux, quasi neutre hors échantillon (-0,01 %) mais avec
+  un écart in-sample/hors-échantillon bien plus faible que le suivi de
+  tendance — signe de moins de sur-ajustement, pas encore un edge.
+  Diagnostic : 2321 trades/3,5 ans, 6150 € de frais sur 10000 € initiaux —
+  les frais dominaient le résultat.
+- **Réduction de la fréquence de trading** (seuil d'entrée plus large,
+  moins de trades) : la zone `period≈70-80, entryK=4` (sans filtre de
+  tendance) est le meilleur candidat trouvé — validé avec **0 degré de
+  liberté** (un seul réglage fixe, aucune sélection walk-forward possible) :
+  rendement hors échantillon moyen +0,67 à +0,71 % par fenêtre de test
+  (~1 mois), 65-68 % de trades gagnants, facteur de profit ~2-2,7 sur
+  76-81 trades complets. Chercher plus loin dans cette direction
+  (`period` > 100 ou `entryK` > 4,5) redégrade le résultat par manque
+  d'échantillon (3-13 trades actifs sur 37 fenêtres) — signe de sur-ajustement,
+  pas d'amélioration réelle.
+- **Filtre de tendance** (n'acheter un creux que si le prix reste au-dessus
+  d'une moyenne longue) : incompatible avec ce signal sur cette période —
+  un filtre court/moyen (100-200 bougies) élimine tous les trades, un filtre
+  très long (600+ bougies) n'en laisse que 16, trop peu pour conclure.
+- **Sélection de paires post-hoc** (retirer les 7 paires nettes négatives
+  sur 20) : délibérément **non retenue**. Avec 1 à 9 trades par paire,
+  distinguer une "mauvaise" paire d'une paire malchanceuse sur cette
+  période précise n'est pas possible sans tomber dans le biais de
+  sélection rétroactive que `universe.ts` met explicitement en garde
+  contre.
+- **Filtre de volume** (n'acheter un creux que si le volume de la bougie
+  dépasse sa moyenne récente × un multiplicateur — `volumePeriod`/
+  `volumeMultiplier` sur `mean-reversion`) : testé par walk-forward avec
+  **0 degré de liberté** (grille fixe de 6 réglages, aucune sélection),
+  `volumePeriod=20` contre les deux références `period=70/80, entryK=4`.
+  Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec filtre : period=70 → +0,68 % (12/37) à
+  `volumeMultiplier=1.2`, puis **dégradation** à +0,66 % (11/37) et
+  +0,52 % (11/37) pour 1,5 et 2,0 ; period=80 → **strictement identique**
+  (+0,71 %, 13/37) aux trois multiplicateurs testés (1,2 / 1,5 / 2,0) : à 1,2 et 1,5 le filtre ne bloque aucun signal d'entrée ; à 2,0 il en bloque 3, mais exactement les 3 que le runner rejetait déjà faute de slot libre (`maxConcurrentPositions=5`) ou de capital — la séquence de trades exécutés (45) est inchangée. Ce non-effet dépend donc du régime d'allocation, pas seulement du signal : à revérifier si `maxConcurrentPositions`/`riskPerTradePct` changent.
+  Aucun réglage ne dépasse clairement la référence — au mieux neutre, au
+  pire dégradé. Le filtre de volume **n'apporte rien de plus** sur cette
+  période : non retenu, le candidat sans filtre de volume reste la
+  référence.
+- **Filtre de régime de volatilité** (bloquer une entrée quand
+  std(period)/sma(period) dépasse un seuil — `maxVolatilityRatio` sur
+  `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
+  (grille fixe de 6 réglages, aucune sélection), `maxVolatilityRatio` ∈
+  {0,06 ; 0,075 ; 0,09} contre les deux références `period=70/80,
+  entryK=4`. Cette grille avait été calibrée (voir la spec) sur la
+  distribution *inconditionnelle* du ratio std/sma sur toutes les barres ;
+  mais le filtre n'agit qu'au moment d'une tentative d'entrée, et cette
+  distribution *conditionnelle à un signal d'entrée* est bien plus
+  resserrée — médiane 0,0310 (period=70) / 0,0369 (period=80), maximum
+  0,0762 (period=70) / 0,0794 (period=80) sur les 58 (period=70) et 57
+  (period=80) tentatives d'entrée réelles des 37 fenêtres de test
+  (chiffres imprimés par `scripts/tune-mean-reversion-volatility.ts`
+  lui-même, section « tentatives d'entrée réelles »). Le réglage `0,09`
+  était donc structurellement hors d'atteinte — aucune valeur observée ne
+  peut jamais le dépasser — et pas un non-effet empirique parmi d'autres.
+  Référence sans filtre : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec filtre, à `maxVolatilityRatio=0,09`
+  le résultat est **bit-identique** à la référence pour les deux périodes
+  — le script imprime le rendement de chaque fold en pleine précision
+  pour les deux runs et `max(|diff|) = 0` sur les 37 folds des deux
+  périodes, pas seulement une égalité à 2 décimales : sur les 58/57
+  tentatives d'entrée réelles mesurées, aucune n'atteint un coefficient
+  de variation > 0,09 ; le filtre ne se déclenche donc jamais dans ces
+  fenêtres. Contrairement au filtre de volume en Phase 6 (où le non-effet
+  venait de `maxConcurrentPositions`/capital masquant des entrées
+  réellement bloquées), c'est ici un vrai non-déclenchement du filtre
+  lui-même, pas un plafond qui masque son effet. Aux seuils plus serrés,
+  le filtre se déclenche réellement (1 entrée bloquée sur 58/57 à
+  `0,075` ; 4 à `0,06` pour period=70, 5 pour period=80) et le résultat
+  mesuré se dégrade : period=70 → +0,57 % (12/37) à 0,075 puis +0,50 %
+  (11/37) à 0,06 ; period=80 → +0,63 % (13/37) à 0,075 puis +0,52 %
+  (13/37) à 0,06. Cette dégradation doit être lue avec prudence : les
+  entrées bloquées à ces seuils ne forment pas un échantillon indépendant
+  — elles se concentrent sur deux ou trois dates calendaires seulement
+  (2023-06-10 : SOLEUR, ADAEUR ; 2024-08-05 : ETHEUR, LINKEUR, UNIEUR ;
+  2024-12-20 : XDGEUR isolé), et une seule des sept entrées bloquées est
+  un aller-retour clos dans sa fenêtre de test (XDGEUR, +376 € réalisés,
+  qui à lui seul explique tout le delta de -3,76pp du fold où il
+  apparaît) — les autres étaient encore ouvertes à la fin de leur fenêtre
+  de test, valorisées au prix du marché plutôt que closes : au fold
+  period=70 où l'écart est le plus visible, le rendement de référence
+  (+2,72 %) provient entièrement de deux positions encore ouvertes,
+  contre 0,0000 % exactement pour la version filtrée qui n'a aucun trade
+  sur cette fenêtre. Le même standard que celui appliqué plus haut
+  (period>100/entryK>4,5, rejeté pour trop peu de trades actifs)
+  s'applique ici : la conclusion « non retenu » reste correcte — aucun
+  réglage ne démontre de gain — mais elle ne doit pas être lue comme une
+  dégradation établie sur un échantillon indépendant de trades clos.
+  Limite supplémentaire, indépendante de la taille d'échantillon : la
+  fenêtre std/sma inclut la barre de creux courante, donc le filtre
+  remesure en partie la profondeur du creux qui déclenche le signal
+  d'entrée plutôt qu'un régime de volatilité préexistant (partiellement
+  colinéaire avec `entryK`) — un choix défendable pour ne pas ajouter de
+  degré de liberté (voir la spec), mais le proxy implémenté n'est donc
+  pas une mesure de régime pure ; une piste future serait de mesurer ce
+  ratio sur une fenêtre décalée (excluant la barre courante), sans que
+  cela change la conclusion de cette phase.
+  Le filtre de régime de volatilité **n'apporte rien de plus** sur cette
+  période : non retenu, le candidat sans filtre de régime de volatilité
+  reste la référence.
+- **Force relative / momentum cross-sectionnel** (classer les 20 paires
+  par performance récente, détenir seulement les meilleures) : famille de
+  signal explorée en spike (jetable, jamais formalisée en code de
+  production). Sans hystérésis, rendement négatif in-sample **et** hors
+  échantillon (pas un cas de sur-ajustement, juste l'absence d'edge). Avec
+  hystérésis (entrée top-3, sortie seulement après le top-10, pour réduire
+  le churn), quasi neutre hors échantillon (-0,28 %) mais avec un écart
+  in/hors-échantillon plus marqué que mean-reversion. Ni pire ni meilleur
+  que le candidat déjà trouvé — non retenue, non creusée davantage.
+- **Breakout Donchian/Turtle** (`donchian-breakout`, cassure du plus haut
+  (entrée) ou du plus bas (sortie) sur une fenêtre glissante,
+  `src/strategy/donchianBreakout.ts`) : troisième famille directionnelle
+  testée par walk-forward, indépendante du suivi de tendance et du momentum
+  cross-sectionnel — grille exploratoire alignée `(entryPeriod, exitPeriod)`
+  ∈ {(30,10), (60,20), (120,40)} (ratio ~3:1, convention Turtle), calibrée
+  directement en bougies 4h, sur les 20 paires réelles
+  (`scripts/tune-donchian-breakout.ts`, chiffres imprimés par ce script).
+  **Signature de sur-optimisation nette** : rendement in-sample moyen
+  +27,50 %, rendement hors échantillon moyen +2,70 % (11/37 fenêtres
+  gagnantes, meilleur/pire fold +136,12 % / -16,57 %) — un écart d'environ
+  25 points entre in-sample et hors-échantillon, du même ordre que le suivi
+  de tendance. Ce +2,70 % moyen hors échantillon n'est en outre pas
+  représentatif de l'ensemble : il est presque entièrement porté par un
+  seul fold hors norme (+136,12 %, fold 23, combinaison
+  entryPeriod=60/exitPeriod=20) ; en l'excluant, la moyenne hors
+  échantillon des 36 fenêtres restantes devient **négative** (-1,01 %).
+  Détail par combinaison sélectionnée : entryPeriod=120/exitPeriod=40
+  (17/37 folds, la plus souvent retenue) → -1,31 % en moyenne
+  (3/17 gagnants) ; entryPeriod=60/exitPeriod=20 (12/37 folds) → +12,66 %
+  en moyenne (6/12 gagnants, porté à environ 90 % par l'outlier ci-dessus —
+  hors ce fold, la moyenne du groupe reste légèrement positive, +1,44 % sur
+  les 11 fenêtres restantes) ; entryPeriod=30/exitPeriod=10 (8/37 folds) →
+  -3,72 % en moyenne (2/8 gagnants). Aucune des trois combinaisons ne
+  montre un edge robuste après frais. Vérification anti-dilution (leçon
+  explicite de la revue finale de la Phase 9, où `lookbackPeriod=168` ne
+  laissait que 11 barres de décision par fenêtre de test et faisait tomber
+  la plupart des folds à zéro trade) : avec la grille de cette phase
+  (`entryPeriod` max = 120), la fenêtre de test la plus contraignante
+  compte 180 - 120 - 1 = 59 barres de décision, très supérieur au cas
+  dégénéré de la Phase 9. Ce calcul de barres ne suffit cependant pas à lui
+  seul à garantir qu'un fold a réellement tradé : le script rejoue chaque
+  fenêtre de test et vérifie si sa courbe d'équité est restée strictement
+  plate (aucun trade exécuté) — 4/37 fenêtres le sont, et exactement les
+  quatre folds à rendement nul repérés dans le détail par fold (folds 20,
+  33, 34, 36, tous entryPeriod=120/exitPeriod=40, soit 4 des 17 folds de ce
+  groupe). Le rendement moyen quasi nul de ce groupe (-1,31 %) n'est donc
+  pas un artefact de mesure caché par la fenêtre de test — il combine des
+  folds qui ont réellement tradé sans edge et des folds qui n'ont
+  simplement pas tradé, ce qui renforce plutôt qu'il n'affaiblit la
+  conclusion « non retenu » : les moyennes rapportées ici ne sont pas
+  diluées par le mécanisme non mesurable qui affectait la Phase 9. Non
+  retenu : troisième famille directionnelle à échouer, avec la même
+  signature de sur-optimisation que le suivi de tendance et le même
+  verdict de non-edge que le momentum cross-sectionnel.
+
+- **Stop de temps** (sortie forcée après `maxHoldBars` barres si le retour
+  à la moyenne ne s'est pas encore produit — `maxHoldBars` sur
+  `mean-reversion`) : testé par walk-forward avec **0 degré de liberté**
+  (grille fixe de 6 réglages, aucune sélection), `maxHoldBars` ∈
+  {75 ; 90 ; 110} contre les deux références `period=70/80, entryK=4`
+  (chiffres imprimés par `scripts/tune-mean-reversion-timestop.ts`).
+  Référence sans stop : period=70 → +0,67 % (12/37 fenêtres gagnantes),
+  period=80 → +0,71 % (13/37). Avec stop de temps, les six réglages sont
+  **strictement identiques à la référence**, y compris en pleine précision
+  (max(|diff|) = 0 sur les 37 folds pour chacun des 6 réglages, pas
+  seulement l'arrondi à 2 décimales) : period=70 → +0,67 % (12/37) aux
+  trois valeurs de `maxHoldBars` (75, 90, 110) ; period=80 → +0,71 % (13/37)
+  aux trois. Le compteur train+test combiné (entraînement et test de
+  chaque fold réunis) rapporte bien des dizaines de sorties par stop de
+  temps par réglage (69/32/5 pour period=70 à `maxHoldBars`=75/90/110,
+  98/71/10 pour period=80), mais ce compteur mélange les deux fenêtres. En
+  isolant strictement les 37 fenêtres de test walk-forward (sans la
+  portion d'entraînement), le stop de temps se déclenche **zéro fois**,
+  pour les 6 réglages testés.
+  Ce n'est pas qu'une absence empirique : c'est en partie **structurellement
+  impossible**. `runBacktest` (`src/backtest/runner.ts`) itère `t` de
+  `strategy.warmup` (= `period` ici) à `length-2`, et une entrée se remplit
+  à `t+1` ; dans une fenêtre de test isolée de 180 barres, le `barsHeld`
+  maximal atteignable est donc 178-71=107 pour `period=70` et 178-81=97
+  pour `period=80`. **`maxHoldBars=110` ne peut donc jamais se déclencher
+  dans aucune fenêtre de test, pour aucune des deux périodes** — 2 des 6
+  points de grille sont hors d'atteinte par construction. Les 4 autres
+  réglages (75/90 aux deux périodes) restent atteignables en théorie mais
+  ne se déclenchent jamais empiriquement sur ces 37 fenêtres : avec
+  `entryK=4` (creux profond avant d'entrer), le retour à la moyenne semble
+  intervenir avant `maxHoldBars` barres pour les positions ouvertes dans
+  ces fenêtres. C'est la même famille de problème que le non-déclenchement
+  structurel de `maxVolatilityRatio=0,09` en Phase 7 (grille calibrée sans
+  vérifier ce qui est réellement mesurable par le harnais walk-forward),
+  mais sur un axe différent : ici la longueur de la fenêtre de test
+  (`testBars=180`), pas la distribution du signal d'entrée.
+  La conclusion honnête n'est donc pas « neutre » mais **non concluant** :
+  ce harnais walk-forward (`testBars=180`) ne peut pas mesurer un stop de
+  temps de 75 à 110 barres hors échantillon. Non retenu — comme tout
+  résultat non concluant, il ne devient pas un candidat adopté — le
+  candidat sans stop de temps reste la référence.
+
+- **Momentum cross-sectionnel** (`src/strategy/crossSectionalMomentum.ts`,
+  Phase 9) : contrairement au spike jetable ci-dessus, cette fois formalisé
+  en code de production (rebalancement hebdomadaire pur, sans hystérésis,
+  ordre exits-avant-enters) et évalué par walk-forward avec une vraie
+  sélection de grille — 3 valeurs de `topN` ∈ {3, 5, 7}, chacune couplée à
+  `maxConcurrentPositions` (un appel `runWalkForward` séparé par `topN`),
+  contre une grille exploratoire `lookbackPeriod` ∈ {42, 84, 168} (chiffres
+  imprimés par `scripts/tune-cross-sectional-momentum.ts`) : rendement
+  in-sample moyen +38,62 % à +52,83 % selon `topN`, rendement hors
+  échantillon moyen **négatif** dans les trois cas : `topN=3` → -1,40 %
+  (6/37 fenêtres gagnantes, meilleur/pire fold +9,29 % / -21,31 %) ;
+  `topN=5` → -1,88 % (7/37, +47,27 % / -18,45 %) ; `topN=7` → -1,52 % (5/37,
+  +45,02 % / -23,29 %). L'écart in-sample/hors-échantillon est plus marqué
+  que celui du suivi de tendance en ouverture de cette section — mais le
+  rendement hors échantillon lui-même y est *moins* négatif (-1,4 à -1,9 %
+  ici contre -3 à -4 % pour le suivi de tendance), c'est-à-dire moins
+  mauvais sur la métrique qui décide effectivement de l'adoption ; l'écart
+  in/hors-échantillon plus marqué ne doit donc pas être lu comme un
+  résultat pire — voir aussi plus bas pourquoi cet écart est lui-même
+  partiellement gonflé par un déficit de mesure. Le `lookbackPeriod`
+  sélectionné par fold n'est pas stable d'un `topN` à l'autre : `168`
+  domine pour `topN=3` (27/37 folds) et `topN=7` (23/37), `84` pour
+  `topN=5` (18/37) — la sélection walk-forward suit le bruit in-sample
+  (jusqu'à +305 % sur un seul fold) plutôt qu'un signal réel.
+
+  **Déficit de mesure sur `lookbackPeriod=168`** (même famille de piège que
+  les Phases 7 et 8, révélé par la revue finale de branche, et non par un
+  nouveau run visant à inverser la conclusion) : `warmup = lookbackPeriod`
+  (`src/strategy/crossSectionalMomentum.ts`) et `runBacktest`
+  (`src/backtest/runner.ts`) n'itère les barres de décision que de `warmup`
+  à `length-2` — dans une fenêtre de test isolée de `TEST_BARS=180` barres,
+  `lookbackPeriod=168` ne laisse que 11 barres de décision (168 à 178) face
+  à une frontière de rebalancement hebdomadaire qui ne revient que tous les
+  42 barres : au plus une frontière peut y tomber, souvent aucune.
+  `scripts/tune-cross-sectional-momentum.ts` compte désormais, pour chaque
+  `lookbackPeriod`, combien des 37 fenêtres de test walk-forward n'ont vu
+  absolument aucun rebalancement (courbe d'équité rigoureusement plate à
+  `initialCash`, rendement hors échantillon exactement 0,00 % par
+  construction) : `lookbackPeriod=42` → 0/37, `lookbackPeriod=84` → 0/37,
+  `lookbackPeriod=168` → **27/37**, et ce quel que soit `topN` (la frontière
+  de rebalancement ne dépend que du temps, pas de `topN` — vérifié
+  empiriquement identique sur les trois valeurs). Comme `168` est le
+  réglage sélectionné par walk-forward dans la majorité des folds pour
+  `topN=3` (27/37) et `topN=7` (23/37), la plupart des rendements hors
+  échantillon qui composent ces deux moyennes ne sont pas des pertes
+  mesurées mais des non-mesures diluées vers 0 % : sur les 27 folds où
+  `topN=3` sélectionne `168`, 20 sont de tels folds vides et seulement 7 ont
+  effectivement tradé (moyenne hors échantillon sur ces 7 folds : **+1,79 %**) ;
+  pour `topN=7`, 18 des 23 folds sélectionnant `168` sont vides, 5 ont tradé
+  (moyenne **+0,95 %**). Autrement dit, la partie de `lookbackPeriod=168`
+  réellement mesurée n'est pas pire que la moyenne globale de son `topN` —
+  elle est même légèrement positive, mais sur un échantillon bien trop
+  petit (5 à 7 folds) pour en tirer une conclusion. Le résultat négatif de
+  `topN=3` et `topN=7` vient donc surtout des folds restants, où
+  `lookbackPeriod` vaut 42 ou 84 et où le rendement est réellement mesuré
+  (10 folds pour `topN=3` : 5 à `42` moyenne -10,00 %, 5 à `84` moyenne
+  -2,85 % ; 14 folds pour `topN=7` : 5 à `42` moyenne +5,67 %, 9 à `84`
+  moyenne -9,93 %). `topN=5` échappe en grande partie à ce déficit :
+  walk-forward y sélectionne surtout `lookbackPeriod=84` (18/37 folds,
+  jamais vide, rendement hors échantillon moyen **-5,81 %**, pleinement
+  mesuré) ; `168` n'y est sélectionné que 15/37 fois, dont 11 vides et
+  seulement 4 tradés (moyenne +3,97 %, échantillon minuscule).
+  La conclusion « famille non retenue » reste correcte — aucune combinaison
+  `(topN, lookbackPeriod)`, mesurée ou diluée, ne démontre d'edge hors
+  échantillon — mais le diagnostic sous-jacent diffère selon `topN` : pour
+  `topN=3` et `topN=7`, l'essentiel de la moyenne négative reportée
+  provient de la sélection walk-forward tombant sur `lookbackPeriod=42` ou
+  `84` dans une minorité de folds, pas d'un `168` démontré perdant (sa
+  portion mesurée est même légèrement positive, sur trop peu de folds pour
+  compter) ; pour `topN=5`, `lookbackPeriod=84` fournit à lui seul un
+  résultat négatif réellement mesuré sur 18 folds sur 37. Famille non
+  retenue.
+
+- **Mean-reversion cross-sectionnelle** (priorise les entrées simultanées
+  par profondeur de survente — z-score décroissant — plutôt que l'ordre
+  arbitraire de `combineStrategies` ; même signal d'entrée/sortie que le
+  candidat déjà validé, **0 degré de liberté ajouté**) : testée par
+  walk-forward et par un diagnostic de saturation du plafond de positions
+  (`scripts/tune-cross-sectional-mean-reversion.ts`), aux deux réglages
+  `period=70/80, entryK=4`.
+  **D'abord le diagnostic de saturation**, car la variante ne peut avoir d'effet
+  que si `maxConcurrentPositions=5` est effectivement atteint pendant que
+  plusieurs paires sont éligibles simultanément — elle diffère de la référence
+  sur deux axes (priorité par z-score **et** ordre sorties-avant-entrées) :
+  sur le backtest complet (hors walk-forward), la référence subit 85 rejets
+  pour cause de plafond sur 162 fills (81 allers-retours) à `period=70`
+  (81 rejets sur 152 fills — 76 allers-retours — à `period=80`), la variante
+  cross-sectionnelle 74 rejets sur 162 fills (81 allers-retours) à `period=70`
+  (72 rejets sur 150 fills — 75 allers-retours — à `period=80`) —
+  dans les deux cas la totalité des rejets enregistrés sont dus au plafond,
+  aucune autre cause de rejet. Le plafond est donc réellement saturé, pas
+  marginalement : contrairement au filtre de régime de volatilité (Phase 7,
+  seuil hors d'atteinte) ou au stop de temps (Phase 8, fenêtre de test trop
+  courte), le mécanisme testé ici a effectivement eu l'occasion de jouer —
+  un résultat neutre ne serait donc pas ici une question de mécanisme
+  structurellement inopérant.
+  **Résultat walk-forward** (37 fenêtres de test) : à `period=70`,
+  cross-sectionnelle +0,72 % (12/37 fenêtres gagnantes) contre référence
+  +0,67 % (12/37) — écart de +0,05 point ; à `period=80`, cross-sectionnelle
+  +0,72 % (13/37) contre référence +0,71 % (13/37) — écart de +0,01 point.
+  Le taux de fenêtres gagnantes est strictement identique aux deux réglages
+  et les écarts de rendement moyen sont du même ordre de grandeur que le
+  bruit déjà observé sur cette famille de stratégie (ex. filtre de volume,
+  Phase 6, ±0,01-0,02pp) : ce n'est pas une amélioration claire, seulement
+  marginale. Le résultat est donc **neutre** — le plafond était bien
+  saturé, ce n'est pas un cas « non concluant » faute d'occasion de jouer —
+  et n'est pas retenu comme amélioration : le candidat reste
+  `mean-reversion` assemblé via `combineStrategies`, le **Statut**
+  ci-dessous inchangé.
+
+**Statut** : `mean-reversion` (`period=70-80, entryK=4`, univers complet,
+sans filtre de tendance, de volume ni de régime de volatilité) est un
+candidat **provisoire**, pas une stratégie
+validée pour du capital réel — l'échantillon (76-81 trades sur 3,5 ans)
+reste modeste. Il sert de référence pour la Phase 5b, remplaçable dès
+qu'une meilleure stratégie est trouvée.
+
+## Suite
+
+Phase 1 est terminée : boucle event-driven, modèle de frais (0,25 % maker /
+0,40 % taker), slippage, exécution simulée sur une seule paire (BTC/EUR).
+Critère de sortie démontré par `test/phase1.test.ts` : un croisement de
+moyennes mobiles tourne de bout en bout et **perd de l'argent** après frais.
+
+Phase 2 est terminée : backtest multi-paires, `combineStrategies` pour
+assembler des stratégies mono-pair, allocation de capital sous
+`maxConcurrentPositions`. Critère de sortie démontré par
+`test/phase2.test.ts` : le multi-paires ne dépasse jamais le capital
+disponible — un dépassement du plafond de positions concurrentes est refusé
+proprement plutôt que d'engager plus de capital que disponible.
+
+Phase 3 est terminée : sizing par risque, `createAtrRiskCrossover` calcule
+un `stopDistance` à partir de l'ATR, le runner en déduit un budget par
+risque qui resserre (jamais n'élargit) le budget fraction fixe hérité de la
+Phase 2. Critère de sortie démontré par `test/phase3.test.ts` : le sizing
+par risque normalise l'exposition entre paires de volatilité différente,
+sans jamais dépasser le plafond fraction fixe.
+
+Phase 4 est terminée : `totalReturn` (`src/backtest/metrics.ts`) et
+`runWalkForward` (`src/backtest/walkForward.ts`), validation walk-forward
+générique par recherche de grille sur fenêtres glissantes entraînement/test.
+Critère de sortie démontré par `test/phase4.test.ts` : sur un marché
+synthétique sans edge réel, le rendement moyen in-sample sélectionné par
+recherche sur une grille de 48 combinaisons dépasse le rendement moyen hors
+échantillon des mêmes paramètres — le walk-forward révèle l'overfitting
+plutôt que de le masquer.
+
+Phase 5a est terminée : pipeline de données live (`src/live/`).
+`KrakenOhlcSource` détecte la clôture des bougies WebSocket via une fonction
+pure entièrement testée (`processOhlcMessage`), `liveSeriesBuilder`
+construit une `BarSeries` croissante au fil de l'eau en réutilisant
+`freezeSeries` sans le dupliquer. Critère de sortie démontré par
+`test/liveBarSource.test.ts`, `test/krakenOhlcSource.test.ts` et
+`test/liveSeriesBuilder.test.ts` : détection de clôture et construction de
+série couvertes par des tests déterministes exhaustifs, sans jamais tester
+`KrakenOhlcSource` contre un vrai serveur. Aucune logique de
+décision/exécution/portefeuille — mono-pair, pas de rattrapage de coupure,
+pas de persistance : voir Phase 5b.
+
+Phase 5b est terminée : runner de trading papier (`src/live/paperRunner.ts`),
+amorçage REST (`krakenRestSeed.ts`) et résolution des mappings de paires
+(`krakenAssetPairs.ts`, avec traduction du `wsname` WS v1 vers WS v2), et
+persistance par snapshot JSON + journal JSONL (`statePersistence.ts`). Le
+runner réutilise `sizeBuyOrder` (`src/backtest/runner.ts`) comme unique
+source de vérité pour le sizing — jamais dupliqué, pour que le
+sizing/fills papier ne puissent pas diverger de ceux déjà validés par
+walk-forward — avec des fills immédiats au prix de la bougie qui vient de
+clôturer, plutôt qu'à la bougie suivante comme en backtest (la contrainte
+anti-look-ahead n'a pas de sens sur un flux déjà temps réel). Critère de
+sortie démontré par `test/paperRunnerRestart.test.ts` : le portefeuille
+persisté est repris correctement après un redémarrage simulé (nouveau
+runner, nouvelles sources, portefeuille restauré depuis le disque).
+
+Hors périmètre, reporté à une phase ultérieure (voir les specs Phase 1,
+Phase 2, Phase 3, Phase 4, Phase 5a et Phase 5b, section « Hors périmètre ») :
+- Stop-loss réellement exécuté : `stopDistance` sert uniquement au calcul
+  de la taille de position, aucun ordre stop n'est simulé — une position
+  n'est encore fermée que par un `Intent` `'exit'` émis par la stratégie.
+- Slippage dépendant de la volatilité (ATR), plutôt que le bps fixe actuel
+  (`src/backtest/execution.ts`).
+- Ordres limites / distinction maker vs taker à l'exécution.
+- Envoi d'ordres réels à Kraken : la Phase 5b reste strictement du trading
+  papier, aucun chemin vers un ordre réel n'existe dans `paperRunner.ts`.
+- Rattrapage des barres manquées pendant une coupure WebSocket au-delà de
+  l'amorçage REST au démarrage : une coupure prolongée en cours de
+  fonctionnement laisse un trou dans la série, non comblé automatiquement.
+- Monitoring / alerting du runner en production (santé du process, retard
+  de fills, échecs de persistance récurrents) : seuls des `console.error`
+  ponctuels existent aujourd'hui.
+- Métriques Sharpe / drawdown : `metrics.ts` n'expose pour l'instant que le
+  rendement total, conçu pour être étendu sans retoucher le reste.
+- Fenêtre ancrée/croissante (anchored/expanding window) : `runWalkForward`
+  n'implémente que des fenêtres glissantes à taille fixe.
+- Fenêtre de test « à froid » : `runWalkForward` ne fait pas précéder la
+  fenêtre de test d'un historique de warmup pris dans la fenêtre
+  d'entraînement — la mesure hors échantillon perd donc jusqu'à
+  `strategy.warmup` barres effectives, un effet plus sensible avec un
+  warmup grand relativement à `testBars`.
